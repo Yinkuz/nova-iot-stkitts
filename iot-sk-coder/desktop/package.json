@@ -23,13 +23,14 @@
       "main.js",
       "preload.js",
       "src/**/*",
-      "bridge/**/*",
+      "!bridge/**/*",
       "!node_modules/**/*",
       "!dist/**/*"
     ],
 
     "extraResources": [
-      { "from": "../istkc",           "to": "istkc" },
+      { "from": "bridge",             "to": "bridge"      },
+      { "from": "../istkc",           "to": "istkc"       },
       { "from": "../../open-design",  "to": "open-design" }
     ],
 

@@ -42,9 +42,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 # ── Bootstrap path so we can import istkc ────────────────────────────────────
-_HERE   = Path(__file__).resolve().parent
+_HERE   = Path(__file__).resolve().parent   # .../bridge/
 _IS_WIN = sys.platform == "win32"
-_ROOT   = _HERE.parent.parent          # iot-sk-coder/
+
+# Packaged app:  extraResources puts istkc/ next to bridge/ inside resources/
+# Dev layout:    bridge/ is desktop/bridge/; istkc/ is iot-sk-coder/istkc/
+#                so we must go up two levels (desktop → iot-sk-coder).
+_PARENT = _HERE.parent                      # resources/  OR  desktop/
+_ROOT   = _PARENT if (_PARENT / "istkc").exists() else _PARENT.parent
 sys.path.insert(0, str(_ROOT))
 
 if hasattr(sys.stdout, "reconfigure"):

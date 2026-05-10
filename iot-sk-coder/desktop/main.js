@@ -67,7 +67,12 @@ function killStalePort(port) {
 
 function startBridge() {
   return new Promise((resolve, reject) => {
-    const serverScript = path.join(__dirname, 'bridge', 'server.py');
+    // When packaged, bridge/ is an extraResource — use resourcesPath.
+    // In dev, it sits next to main.js (__dirname = desktop/).
+    const bridgeDir  = app.isPackaged
+      ? path.join(process.resourcesPath, 'bridge')
+      : path.join(__dirname, 'bridge');
+    const serverScript = path.join(bridgeDir, 'server.py');
 
     // Try 'python' then fall back to 'py'
     const pythonCmds = ['python', 'py', 'python3'];
