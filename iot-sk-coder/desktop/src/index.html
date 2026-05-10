@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:7823; img-src 'self' data: blob: http://127.0.0.1:7823; frame-src http://localhost:* http://127.0.0.1:*; font-src 'self' data:"/>
+  <title>IOT-ST-KITTS-CODE</title>
+  <link rel="stylesheet" href="styles.css"/>
+  <link rel="stylesheet" href="vendor/hljs/atom-one-dark.min.css"/>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     SETUP SCREEN
+════════════════════════════════════════════════════════════════════════════ -->
+<div id="setup-screen" class="screen">
+  <div class="setup-card">
+    <div class="nova-face-setup" id="nova-face-setup">
+      <pre id="nova-art-setup">  ╭─────────────╮
+  │             │
+  │             │
+  │             │
+  ╰──────┬──────╯</pre>
+    </div>
+
+    <h1 class="setup-title">IOT-ST-KITTS-CODE</h1>
+    <p class="setup-sub">IOT St. Kitts · Internal AI Cowork Assistant</p>
+
+    <!-- Step 1: Team Token -->
+    <div class="setup-step" id="step-token">
+      <div class="step-label"><span class="step-num">1</span> Team Access Token</div>
+      <p class="step-hint">Get this from your IT admin. Shared with all IOT St. Kitts employees.</p>
+      <div class="input-group">
+        <input type="password" id="token-input" class="text-input" placeholder="ISTKC-2025-XXXXXXXX" autocomplete="off"/>
+        <button id="token-btn" class="btn-primary">Verify →</button>
+      </div>
+      <div class="step-error" id="token-error"></div>
+    </div>
+
+    <!-- Step 2: Provider + Key -->
+    <div class="setup-step hidden" id="step-model">
+      <div class="step-label"><span class="step-num">2</span> Choose AI Model</div>
+
+      <div class="provider-grid" id="provider-grid">
+        <button class="provider-card active" data-provider="openai">
+          <div class="provider-name">OpenAI</div>
+          <div class="provider-hint">GPT-4o · o1 · o3-mini</div>
+        </button>
+        <button class="provider-card" data-provider="openrouter">
+          <div class="provider-name">OpenRouter</div>
+          <div class="provider-hint">Claude · Gemini · Llama · 300+</div>
+        </button>
+        <button class="provider-card" data-provider="ollama">
+          <div class="provider-name">Ollama <span class="provider-badge">Local</span></div>
+          <div class="provider-hint">No API key · Private · Offline</div>
+        </button>
+      </div>
+
+      <select id="model-select" class="select-input"></select>
+
+      <div class="input-group" style="margin-top:12px" id="key-group">
+        <input type="password" id="key-input" class="text-input"
+               placeholder="sk-..." autocomplete="off"/>
+        <button id="key-btn" class="btn-primary">Connect →</button>
+      </div>
+      <div class="step-error" id="key-error"></div>
+    </div>
+
+    <!-- Step 3: Ready -->
+    <div class="setup-step hidden" id="step-ready">
+      <div class="step-label" style="color:var(--green)">✓ All set!</div>
+      <p class="step-hint">NOVA is ready. Your settings are saved locally.</p>
+      <button id="enter-btn" class="btn-primary btn-wide">Open NOVA →</button>
+    </div>
+
+    <div class="setup-footer">Not for public distribution · IOT St. Kitts</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     LOADING SCREEN
+════════════════════════════════════════════════════════════════════════════ -->
+<div id="loading-screen" class="screen hidden">
+  <div class="loading-face">
+    <pre id="nova-art-loading">  ╭─────────────╮
+  │  ◈       ◈  │
+  │    ─────    │
+  │  ░░░░░░░░░  │
+  ╰──────┬──────╯</pre>
+    <div class="loading-label">Starting NOVA…</div>
+    <div class="loading-bar"><div class="loading-fill" id="loading-fill"></div></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     MAIN APP
+════════════════════════════════════════════════════════════════════════════ -->
+<div id="app-screen" class="screen hidden">
+
+  <!-- Custom titlebar -->
+  <div id="titlebar">
+    <div id="titlebar-drag">
+      <span class="tb-icon">◈</span>
+      <span class="tb-name">IOT-ST-KITTS-CODE</span>
+    </div>
+    <div id="titlebar-controls">
+      <button class="tb-btn" id="tb-min" title="Minimise">─</button>
+      <button class="tb-btn" id="tb-max" title="Maximise">□</button>
+      <button class="tb-btn tb-close" id="tb-close" title="Close">✕</button>
+    </div>
+  </div>
+
+  <!-- Workspace: chat + terminal stacked -->
+  <div id="workspace">
+
+    <div id="main-layout">
+
+      <!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+      <aside id="sidebar">
+
+        <div id="nova-widget">
+          <div id="nova-face-wrap">
+            <pre id="nova-art">  ╭─────────────╮
+  │  ◉       ◉  │
+  │    ╰───╯    │
+  │  ─────────  │
+  ╰──────┬──────╯</pre>
+            <div id="nova-glow-ring"></div>
+          </div>
+          <div id="nova-status-badge">Ready</div>
+        </div>
+
+        <div id="brand-block">
+          <div class="brand-name">IOT-ST-KITTS-CODE</div>
+          <div class="brand-sub">IOT St. Kitts · v0.1.0</div>
+        </div>
+
+        <div id="brain-stats-block">
+          <div class="bs-row"><span>Session</span><span id="sb-session" class="bs-val">#1</span></div>
+          <div class="bs-row"><span>Facts</span>  <span id="sb-facts"   class="bs-val">0</span></div>
+          <div class="bs-row"><span>Projects</span><span id="sb-proj"   class="bs-val">0</span></div>
+          <div class="bs-row"><span>Decisions</span><span id="sb-dec"   class="bs-val">0</span></div>
+        </div>
+
+        <!-- Context window token meter -->
+        <div class="ctx-meter-wrap">
+          <div class="ctx-meter-label">
+            <span>Context</span><span id="ctx-token-count">0 / 128K</span>
+          </div>
+          <div class="ctx-meter-bar"><div class="ctx-meter-fill" id="ctx-meter-fill"></div></div>
+        </div>
+
+        <!-- Workspace -->
+        <div class="sb-section-label">Workspace</div>
+        <div id="workspace-row">
+          <button id="workspace-pick-btn" class="sb-workspace-btn" title="Set project root folder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span id="workspace-label">Set folder…</span>
+          </button>
+          <button id="workspace-git-btn" class="sb-icon-btn hidden" title="Show git status">⎇</button>
+        </div>
+        <div id="git-status-bar" class="hidden">
+          <span id="git-branch-badge"></span>
+          <span id="git-changes-badge"></span>
+        </div>
+
+        <div class="sb-section-label" style="margin-top:10px">Sessions</div>
+        <div id="sessions-search-row">
+          <input id="sessions-search" class="sessions-search-input" type="text"
+                 placeholder="Search sessions…" autocomplete="off" spellcheck="false"/>
+        </div>
+        <button id="new-session-btn" class="sb-new-btn">+ New Session</button>
+        <div id="sessions-list"></div>
+
+        <!-- Theme picker -->
+        <div id="theme-strip">
+          <button class="theme-dot active" data-theme="nova"    title="NOVA · Teal"   style="--dot-c:#00d9ff"></button>
+          <button class="theme-dot"        data-theme="amber"   title="Amber · Gold"  style="--dot-c:#f59e0b"></button>
+          <button class="theme-dot"        data-theme="violet"  title="Violet"        style="--dot-c:#a855f7"></button>
+          <button class="theme-dot"        data-theme="crimson" title="Crimson"       style="--dot-c:#ef4444"></button>
+          <button class="theme-dot"        data-theme="ocean"   title="Ocean · Blue"  style="--dot-c:#38bdf8"></button>
+          <button class="theme-dot"        data-theme="matrix"  title="Matrix · Green" style="--dot-c:#22c55e"></button>
+        </div>
+
+        <div id="sb-footer">
+          <div id="model-pill" title="Click to change model">
+            <span class="model-dot">●</span>
+            <span id="model-pill-name">GPT-4o</span>
+          </div>
+          <button id="brain-btn" class="sb-icon-btn" title="Brain viewer">🧠</button>
+        </div>
+      </aside>
+
+      <!-- ── Chat area ───────────────────────────────────────────────────── -->
+      <div id="chat-column">
+
+        <div id="chat-header">
+          <div id="chat-title-wrap">
+            <span id="chat-session-label">Session #1</span>
+            <span id="chat-model-badge">GPT-4o</span>
+            <span id="routed-badge" class="hidden" title="Auto-routed to faster model for this message"></span>
+          </div>
+          <div id="chat-header-right">
+            <div id="bg-task-pill" class="hidden" title="Background agent task running">
+              <span class="bg-task-spinner">◌</span>
+              <span id="bg-task-label">Agent running…</span>
+              <button id="bg-task-cancel-btn">✕</button>
+            </div>
+            <button class="header-btn" id="hdr-run-btn">⚡ /run</button>
+            <button class="header-btn" id="hdr-preview-btn" title="Toggle preview pane  (Ctrl+Shift+P)">🌐 Preview</button>
+            <button class="header-btn" id="hdr-term-btn">⌨ Terminal</button>
+            <button class="header-btn" id="hdr-clear-btn">Clear</button>
+          </div>
+        </div>
+
+        <div id="messages-wrap">
+          <div id="messages"></div>
+          <!-- Drag-and-drop overlay -->
+          <div id="drag-overlay" class="hidden">
+            <div class="drag-box">
+              <div class="drag-icon">⬇</div>
+              <div class="drag-label">Drop files, folders or images</div>
+              <div class="drag-sub">Code · Images · Documents · Whole folders</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="input-zone">
+          <!-- Autocomplete dropdown (floats above input) -->
+          <div id="autocomplete-drop" class="hidden"></div>
+
+          <div id="cmd-chips">
+            <button class="chip" data-cmd="/run">⚡ /run</button>
+            <button class="chip" data-cmd="/memory">🧠 /memory</button>
+            <button class="chip" data-cmd="/model">⚙ /model</button>
+            <button class="chip" data-cmd="/workspace">📁 /workspace</button>
+            <button class="chip" data-cmd="/git">⎇ /git</button>
+            <button class="chip" data-cmd="/preview">🌐 /preview</button>
+            <button class="chip" data-cmd="/term">⌨ /term</button>
+            <button class="chip" data-cmd="/clear">✕ /clear</button>
+            <button class="chip" data-cmd="/save">💾 /save</button>
+            <button class="chip" data-cmd="/export">📤 /export</button>
+            <button class="chip" data-cmd="/help">? /help</button>
+          </div>
+
+          <div id="attachment-row"></div>
+
+          <div id="input-row">
+            <button id="attach-file-btn" class="input-action-btn" title="Attach file(s)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            </button>
+            <button id="attach-folder-btn" class="input-action-btn" title="Attach folder">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </button>
+            <textarea id="msg-input"
+                      placeholder="Ask NOVA anything… /command or @file"
+                      rows="1"
+                      spellcheck="true"></textarea>
+            <button id="send-btn" title="Send  (Enter)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+          <div id="input-footer">
+            <span id="input-hint">Enter · Shift+Enter new line · @ attach file · / commands · Ctrl+` terminal</span>
+            <span id="char-count"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Preview Pane ──────────────────────────────────────────────────── -->
+      <div id="preview-column">
+        <div id="preview-bar">
+          <span class="preview-title">🌐 Preview</span>
+          <input id="preview-url-input" type="text" placeholder="http://localhost:3000"
+                 spellcheck="false" autocomplete="off"/>
+          <button id="preview-go-btn"     title="Navigate">Go</button>
+          <button id="preview-reload-btn" title="Reload page">↻</button>
+          <button id="preview-ext-btn"    title="Open in system browser">↗</button>
+          <button id="preview-close-btn"  title="Close preview">✕</button>
+        </div>
+        <iframe id="preview-frame" src="about:blank"></iframe>
+      </div>
+
+    </div><!-- /#main-layout -->
+
+    <!-- ── Terminal Pane ───────────────────────────────────────────────────── -->
+    <div id="terminal-pane" class="hidden">
+      <div id="term-bar">
+        <div id="term-bar-left">
+          <span id="term-title">⌨ Terminal</span>
+          <span id="term-cwd"></span>
+        </div>
+        <div id="term-bar-right">
+          <button class="term-ctrl-btn" id="term-clear-btn">Clear</button>
+          <button class="term-ctrl-btn" id="term-kill-btn" style="display:none">■ Kill</button>
+          <button class="term-ctrl-btn" id="term-close-btn">✕</button>
+        </div>
+      </div>
+      <div id="term-output"></div>
+      <div id="term-input-row">
+        <span class="term-prompt">›</span>
+        <input id="term-input" type="text" placeholder="enter command…" autocomplete="off" spellcheck="false"/>
+        <button id="term-send-btn">▶</button>
+      </div>
+    </div>
+
+  </div><!-- /#workspace -->
+</div><!-- /#app-screen -->
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     OVERLAY PANELS
+════════════════════════════════════════════════════════════════════════════ -->
+
+<!-- Brain viewer -->
+<div id="brain-panel" class="panel hidden">
+  <div class="panel-card">
+    <div class="panel-header">
+      <span>🧠 NOVA's Brain</span>
+      <button class="panel-close" data-panel="brain-panel">✕</button>
+    </div>
+    <div class="panel-body" id="brain-body"></div>
+  </div>
+</div>
+
+<!-- Model picker -->
+<div id="model-panel" class="panel hidden">
+  <div class="panel-card panel-narrow">
+    <div class="panel-header">
+      <span>⚙ Change Model</span>
+      <button class="panel-close" data-panel="model-panel">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="provider-grid" id="mp-provider-grid">
+        <button class="provider-card active" data-provider="openai">
+          <div class="provider-name">OpenAI</div>
+          <div class="provider-hint">GPT-4o · o1 · o3-mini</div>
+        </button>
+        <button class="provider-card" data-provider="openrouter">
+          <div class="provider-name">OpenRouter</div>
+          <div class="provider-hint">Claude · Gemini · 300+</div>
+        </button>
+        <button class="provider-card" data-provider="ollama">
+          <div class="provider-name">Ollama <span class="provider-badge">Local</span></div>
+          <div class="provider-hint">No key · Offline</div>
+        </button>
+        <button class="provider-card" data-provider="chatgpt">
+          <div class="provider-name">ChatGPT <span class="provider-badge" style="background:#10a37f">Plus</span></div>
+          <div class="provider-hint">No key · OAuth</div>
+        </button>
+      </div>
+      <select id="mp-model-select" class="select-input" style="margin-top:12px"></select>
+      <input  type="text" id="mp-custom-id" class="text-input" style="display:none;margin-top:6px"
+              placeholder="e.g. openai/gpt-oss-120b  or  anthropic/claude-opus-4-5" autocomplete="off"/>
+      <input  type="password" id="mp-key-input" class="text-input"
+              placeholder="API key (not needed for Ollama)" style="margin-top:8px" autocomplete="off"/>
+      <div id="mp-chatgpt-status" style="display:none;margin-top:8px;padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:13px;color:#166534">
+        <strong>✓ ChatGPT Plus connected</strong><br>
+        <span id="mp-chatgpt-info" style="color:#15803d;font-size:12px">Loading…</span>
+      </div>
+      <div class="step-error" id="mp-error"></div>
+      <button id="mp-save-btn" class="btn-primary btn-wide" style="margin-top:12px">Save &amp; Switch</button>
+    </div>
+  </div>
+</div>
+
+<!-- Agent task brief -->
+<div id="brief-panel" class="panel hidden">
+  <div class="panel-card">
+    <div class="panel-header">
+      <span>⚡ Agent Task Brief</span>
+      <button class="panel-close" data-panel="brief-panel">✕</button>
+    </div>
+    <div class="panel-body" id="brief-body"></div>
+    <div class="panel-footer">
+      <button id="brief-execute-btn" class="btn-primary">⚡ Execute with Agent →</button>
+      <button class="btn-ghost panel-close" data-panel="brief-panel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Diff Review Overlay ──────────────────────────────────────────────────── -->
+<div id="diff-overlay" class="hidden">
+  <div id="diff-card">
+    <div id="diff-header">
+      <span id="diff-title">📝 Review Changes</span>
+      <button id="diff-close-x" class="diff-x-btn">✕</button>
+    </div>
+    <div id="diff-filepath"></div>
+    <div id="diff-body"></div>
+    <div id="diff-footer">
+      <button id="diff-confirm-btn" class="btn-primary">✓ Apply to Disk</button>
+      <button id="diff-cancel-btn"  class="btn-ghost">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Panel backdrop -->
+<div id="panel-backdrop" class="hidden"></div>
+
+<script src="vendor/hljs/highlight.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

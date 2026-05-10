@@ -1,0 +1,59 @@
+{
+  "name": "nova-iot-stkitts",
+  "version": "1.0.0",
+  "description": "NOVA — IOT St. Kitts internal AI coding assistant",
+  "author": "IOT St. Kitts Engineering <engineering@iotstkitts.com>",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack":  "electron-builder --dir",
+    "dist":  "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron":         "^30.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId":       "com.iotstkitts.nova",
+    "productName": "NOVA",
+    "copyright":   "© 2025 IOT St. Kitts Engineering",
+
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "bridge/**/*",
+      "!node_modules/**/*",
+      "!dist/**/*"
+    ],
+
+    "extraResources": [
+      { "from": "../istkc",           "to": "istkc" },
+      { "from": "../../open-design",  "to": "open-design" }
+    ],
+
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico"
+    },
+
+    "nsis": {
+      "oneClick":               false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut":  true,
+      "createStartMenuShortcut": true,
+      "shortcutName":           "NOVA",
+      "installerIcon":          "build/icon.ico",
+      "uninstallerIcon":        "build/icon.ico",
+      "installerHeaderIcon":    "build/icon.ico",
+      "license":                "build/LICENSE.txt",
+      "include":                "build/installer.nsh"
+    },
+
+    "directories": {
+      "output":     "dist",
+      "buildResources": "build"
+    }
+  }
+}

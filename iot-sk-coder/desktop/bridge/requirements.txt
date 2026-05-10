@@ -1,0 +1,18 @@
+# NOVA bridge Python dependencies
+# Install with: pip install -r requirements.txt
+
+# Core LLM client (OpenAI-compatible)
+openai>=1.0
+
+# Rich terminal output (used by istkc package)
+rich>=13.0
+questionary>=2.0
+
+# Web tools
+ddgs>=6.0
+beautifulsoup4>=4.12
+
+# Document generation (optional — used by create_document tool)
+python-docx>=1.0
+openpyxl>=3.1
+fpdf2>=2.7
