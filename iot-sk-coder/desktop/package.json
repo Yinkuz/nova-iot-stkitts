@@ -34,21 +34,11 @@
     ],
 
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "icon": "build/icon.ico"
-    },
-
-    "nsis": {
-      "oneClick":               false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut":  true,
-      "createStartMenuShortcut": true,
-      "shortcutName":           "NOVA",
-      "installerIcon":          "build/icon.ico",
-      "uninstallerIcon":        "build/icon.ico",
-      "installerHeaderIcon":    "build/icon.ico",
-      "license":                "build/LICENSE.txt",
-      "include":                "build/installer.nsh"
+      "target": [{ "target": "zip", "arch": ["x64"] }],
+      "icon": "build/icon.ico",
+      "signingHashAlgorithms": null,
+      "sign": null,
+      "signAndEditExecutable": false
     },
 
     "directories": {

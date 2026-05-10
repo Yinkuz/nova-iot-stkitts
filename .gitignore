@@ -5,8 +5,6 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
-dist/
-build/
 .eggs/
 *.egg
 *.whl
@@ -63,3 +61,4 @@ secrets/
 .idea/
 *.suo
 *.user
+open-design/.git_bak/

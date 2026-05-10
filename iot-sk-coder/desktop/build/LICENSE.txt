@@ -1,0 +1,10 @@
+NOVA — IOT St. Kitts Internal AI Assistant
+Copyright © 2025 IOT St. Kitts Engineering
+
+This software is proprietary and confidential. It is licensed exclusively
+for use by IOT St. Kitts employees and authorised personnel.
+
+Redistribution, resale, or use outside the IOT St. Kitts organisation
+is strictly prohibited without written permission.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
