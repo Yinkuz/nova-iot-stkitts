@@ -49,11 +49,11 @@ const MODELS = {
     { id: 'claude-haiku',      name: 'Claude Haiku 3.5  — fast & cheap',    api_id: 'anthropic/claude-3-5-haiku' },
     { id: 'claude-opus',       name: 'Claude Opus 4  — most capable',       api_id: 'anthropic/claude-opus-4-5' },
     { id: 'gemini-flash',      name: 'Gemini 2.0 Flash  — 1M context',      api_id: 'google/gemini-2.0-flash-001' },
+    { id: 'gemma-3-vision',    name: 'Gemma 3 27B  — vision + images 🖼️',   api_id: 'google/gemma-3-27b-it' },
     { id: 'llama-70b',         name: 'Llama 3.3 70B  — open source',        api_id: 'meta-llama/llama-3.3-70b-instruct' },
     { id: 'deepseek-v3',       name: 'DeepSeek V3  — strong coder',         api_id: 'deepseek/deepseek-chat' },
     { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash  — fast & smart',    api_id: 'deepseek/deepseek-v4-flash' },
     { id: 'deepseek-v4-pro',   name: 'DeepSeek V4 Pro  — heavy duty ⚡pair', api_id: 'deepseek/deepseek-v4-pro' },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash  — lightwork',       api_id: 'deepseek/deepseek-v4-flash' },
     { id: 'mistral-large',     name: 'Mistral Large  — fast & reliable',    api_id: 'mistralai/mistral-large-latest' },
     { id: 'qwen-coder',        name: 'Qwen 2.5 Coder 32B  — specialised',   api_id: 'qwen/qwen-2.5-coder-32b-instruct' },
     { id: 'grok-4-1-fast',     name: 'Grok 4.1 Fast  — xAI, speedy',        api_id: 'x-ai/grok-4.1-fast' },
@@ -101,6 +101,7 @@ const CTX_WINDOWS = {
   'anthropic/claude-3-5-haiku':                200,
   'anthropic/claude-opus-4-5':                 200,
   'google/gemini-2.0-flash-001':             1_000,
+  'google/gemma-3-27b-it':                    131,
   'google/gemini-pro-1.5':                   2_000,
   'meta-llama/llama-3.3-70b-instruct':         128,
   'deepseek/deepseek-chat':                     64,
@@ -116,6 +117,20 @@ const CTX_WINDOWS = {
   'deepseek/deepseek-v4-pro':                    128,
   'deepseek/deepseek-v4-flash':                  128,
 };
+
+// ── Vision model routing ──────────────────────────────────────────────────────
+// Models that natively support image/vision input
+const VISION_MODELS = new Set([
+  'google/gemma-3-27b-it',
+  'google/gemini-2.0-flash-001',
+  'google/gemini-3.1-flash-lite',
+  'anthropic/claude-sonnet-4-5',
+  'anthropic/claude-3-5-haiku',
+  'anthropic/claude-opus-4-5',
+  'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'o4-mini',
+]);
+// OpenRouter model to fall back to when the active model can't process images
+const VISION_FALLBACK = 'google/gemma-3-27b-it';
 
 // ── Smart model routing ───────────────────────────────────────────────────────
 // Maps flagship → fast/cheap alternative for simple messages & background tasks
@@ -1643,7 +1658,17 @@ async function sendMessage(text) {
     ];
 
     // Pick the right model tier for this message
-    const chosenModel = routeModel(trimmed, 'auto');
+    let chosenModel = routeModel(trimmed, 'auto');
+
+    // Auto-route to Gemma if images are attached and the active model can't process them
+    const hasImages = attachments.some(a => a.type === 'image' || a.type === 'large-image');
+    if (hasImages && !VISION_MODELS.has(chosenModel.api_id)) {
+      if (state.modelCfg?.provider === 'openrouter') {
+        chosenModel = { ...state.modelCfg, api_id: VISION_FALLBACK, display: 'Gemma 3 🖼️ vision' };
+      }
+      // (other providers like openai already have vision in their models — no override needed)
+    }
+
     showRoutedBadge(chosenModel);
 
     await streamChat(
@@ -1889,7 +1914,8 @@ function showRoutedBadge(chosenModel) {
   if (!badge) return;
   const isRouted = chosenModel?.api_id !== state.modelCfg?.api_id;
   if (isRouted) {
-    badge.textContent = `⚡ ${chosenModel.display}`;
+    const isVision = chosenModel.api_id === VISION_FALLBACK;
+    badge.textContent = isVision ? `🖼️ Auto-switched → Gemma 3 (vision)` : `⚡ ${chosenModel.display}`;
     badge.classList.remove('hidden');
     setTimeout(() => badge.classList.add('hidden'), 6000);
   } else {
