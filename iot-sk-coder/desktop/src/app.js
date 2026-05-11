@@ -403,14 +403,15 @@ async function _addFilePaths(filePaths) {
         });
       } else {
         state.attachments.push({
-          id:      crypto.randomUUID(),
+          id:       crypto.randomUUID(),
           name,
-          type:    data.type === 'image' ? 'image' : _attType(name),
+          type:     data.type === 'image' ? 'image' : _attType(name),
           ext,
-          content: data.content,
-          mime:    data.mime || 'text/plain',
-          size:    data.size,
-          preview: data.type === 'image' ? `data:${data.mime};base64,${data.content}` : null,
+          content:  data.content,
+          mime:     data.mime || 'text/plain',
+          size:     data.size,
+          preview:  data.type === 'image' ? `data:${data.mime};base64,${data.content}` : null,
+          origPath: fp,                                      // preserve path for all files
         });
       }
     } catch (err) {
@@ -539,21 +540,23 @@ function renderAttachmentChips() {
 
 // ── Build attachment context for LLM ─────────────────────────────────────────
 function buildAttachmentContext(attachments) {
-  const nonImages  = attachments.filter(a => a.type !== 'image');
-  const largeImgs  = attachments.filter(a => a.type === 'image' && a.isLarge);
+  const nonImages = attachments.filter(a => a.type !== 'image');
+  const images    = attachments.filter(a => a.type === 'image');
 
-  if (!nonImages.length && !largeImgs.length) return null;
+  if (!nonImages.length && !images.length) return null;
 
   let ctx = '## Attached Files\n\n';
 
-  // Large-image metadata — thumbnail sent separately via vision; path usable in code
-  for (const img of largeImgs) {
-    ctx += `### 🖼️ Large Image Asset: \`${img.name}\`\n`;
-    ctx += `- **Original path**: \`${img.origPath || img.name}\`\n`;
-    if (img.width) ctx += `- **Dimensions**: ${img.width}×${img.height} px\n`;
+  // ALL image metadata — the LLM sees each image visually above; path lets it
+  // reference the file in generated code (e.g. <img src> in email signatures).
+  for (const img of images) {
+    ctx += `### 🖼️ Image: \`${img.name}\`\n`;
+    if (img.origPath) ctx += `- **Original path**: \`${img.origPath}\`\n`;
+    if (img.width)    ctx += `- **Dimensions**: ${img.width}×${img.height} px\n`;
     ctx += `- **File size**: ${_fmtSize(img.size)}\n`;
-    ctx += `- A compressed thumbnail is provided for visual context above.\n`;
-    ctx += `- Reference this asset in generated code using the original path.\n\n`;
+    if (img.isLarge)  ctx += `- A compressed thumbnail is provided for visual context above.\n`;
+    ctx += `- To embed this image in HTML use: \`<img src="${img.origPath || img.name}">\`\n`;
+    ctx += `- To embed inline (portable): base64-encode the file and use a data URI.\n\n`;
   }
 
   for (const att of nonImages) {
@@ -2235,6 +2238,19 @@ State what you will do and in what order. Keep it brief. Example:
 - If anything is wrong, fix it autonomously in the same response — do NOT stop and tell the user to fix it
 
 **Ultrathink:** When a problem is architecturally complex, ambiguous, or has failed once already — stop, reason deeply about root cause and approach, then execute. Prefer correctness over speed on hard problems.
+
+## Working with attached images
+When the user attaches an image (business card, logo, screenshot, photo):
+- You can **see** the image and read all text, colours, layout, and details from it
+- The "Attached Files" section in the context tells you the **original file path** — use it
+- **Email signature / HTML output**: use \`write_file\` to create an HTML file. Embed the image either:
+  - As a file reference: \`<img src="C:/path/to/image.png">\` (good for local use)
+  - As inline base64: use \`run_command\` to base64-encode the file:
+    \`python -c "import base64,sys; print(base64.b64encode(open(sys.argv[1],'rb').read()).decode())" "C:/path/to/image.png"\`
+    Then embed: \`<img src="data:image/png;base64,<ENCODED>">\`
+  - **Prefer inline base64** when the user says "with the image included" — it makes the HTML fully self-contained and portable
+- For a **business card → email signature**: extract name, title, phone, email, website, company from the image; build a clean single-table HTML signature; embed the logo inline as base64
+- Never say "I can't embed the image" — use run_command to encode it first, then write_file
 
 ## Conversation context — always know what you just did
 After completing any task (writing a file, running a command, building something), end your response with a one-line footer:
