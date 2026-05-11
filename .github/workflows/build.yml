@@ -1,0 +1,122 @@
+name: Build NOVA
+
+on:
+  # Run automatically when a version tag is pushed (e.g. v1.0.1)
+  push:
+    tags: ['v*']
+  # Also allow manual trigger from the GitHub Actions tab
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.1)'
+        required: true
+        default: 'v1.0.1'
+
+jobs:
+  # ── Windows (.exe NSIS installer) ──────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: iot-sk-coder/desktop/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: iot-sk-coder/desktop
+        run: npm ci
+
+      - name: Build Windows installer
+        working-directory: iot-sk-coder/desktop
+        run: npx electron-builder --win --x64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          WIN_CSC_LINK: ''
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-windows
+          path: iot-sk-coder/desktop/dist/NOVA*.exe
+
+  # ── macOS (.dmg for Intel + Apple Silicon) ─────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: iot-sk-coder/desktop/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: iot-sk-coder/desktop
+        run: npm ci
+
+      - name: Build macOS DMG (Intel + Apple Silicon)
+        working-directory: iot-sk-coder/desktop
+        run: npx electron-builder --mac --x64 --arm64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-macos
+          path: iot-sk-coder/desktop/dist/NOVA*.dmg
+
+  # ── Create / update GitHub Release ─────────────────────────────────────────
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nova-windows
+          path: dist
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nova-macos
+          path: dist
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "NOVA ${{ steps.tag.outputs.tag }}"
+          body: |
+            ## NOVA ${{ steps.tag.outputs.tag }}
+
+            ### Windows
+            Download **NOVA Setup *.exe** — runs the installer, creates a desktop shortcut.
+            **Requires:** Python 3.8+ with "Add Python to PATH" ticked.
+
+            ### macOS
+            Download **NOVA-*.dmg** — drag NOVA to Applications.
+            **Requires:** Python 3 (`brew install python` or https://python.org).
+            **Gatekeeper warning?** Right-click the app → Open → Open anyway (first launch only).
+
+            ---
+            **Team token:** ask your IT admin.
+          draft: false
+          prerelease: false
+          files: dist/*

@@ -74,8 +74,10 @@ function startBridge() {
       : path.join(__dirname, 'bridge');
     const serverScript = path.join(bridgeDir, 'server.py');
 
-    // Try 'python' then fall back to 'py'
-    const pythonCmds = ['python', 'py', 'python3'];
+    // macOS: python3 is default; Windows: python or py; Linux: python3
+    const pythonCmds = process.platform === 'darwin'
+      ? ['python3', 'python']
+      : ['python', 'py', 'python3'];
     let   tried      = 0;
 
     function tryNext() {
