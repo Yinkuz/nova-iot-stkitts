@@ -34,7 +34,6 @@ jobs:
         run: npx electron-builder --win --x64
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          WIN_CSC_LINK: ''
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
