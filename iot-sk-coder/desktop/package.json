@@ -76,6 +76,8 @@
       ]
     },
 
+    "afterPack": "./scripts/afterPackMac.js",
+
     "directories": {
       "output":     "dist",
       "buildResources": "build"
