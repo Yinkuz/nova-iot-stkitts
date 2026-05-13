@@ -667,9 +667,15 @@ function buildAttachmentContext(attachments) {
 }
 
 // ── Build multimodal content array (images + text) ────────────────────────────
-function buildMultimodalContent(text, attachments) {
-  // Only include images that have content (thumbnails or small base64)
-  const images = attachments.filter(a => a.type === 'image' && a.content);
+function buildMultimodalContent(text, attachments, modelApiId = null) {
+  // Only embed image binary data when the chosen model can actually see images.
+  // For text-only models (DeepSeek, Qwen, etc.) passing a base64 image_url part
+  // causes the model to echo the raw bytes back as text, blowing out the context
+  // window. The origPath in the attachment text-context is enough — the model
+  // uses run_command to encode the file itself when needed.
+  const isVision = modelApiId ? VISION_MODELS.has(modelApiId) : true;
+  const images   = isVision ? attachments.filter(a => a.type === 'image' && a.content) : [];
+
   if (!images.length) return text;   // plain string is fine for text-only
 
   const parts = [{ type: 'text', text }];
@@ -1693,11 +1699,25 @@ async function sendMessage(text) {
   state.attachments = [];
   renderAttachmentChips();
 
+  // Orchestrator: lock the active task
+  orchSetTask(trimmed);
+
+  // Resolve the model NOW — before building content — so we know whether to
+  // include image binary data (vision models) or strip it (text-only models).
+  let chosenModel = routeModel(trimmed, 'auto');
+  const hasImages = attachments.some(a => a.type === 'image' || a.type === 'large-image');
+  if (hasImages && !VISION_MODELS.has(chosenModel.api_id)) {
+    if (state.modelCfg?.provider === 'openrouter') {
+      chosenModel = { ...state.modelCfg, api_id: VISION_FALLBACK, display: 'Gemma 3 🖼️ vision' };
+    }
+  }
+
   // Build display content and message content
   const displayText  = trimmed || '(see attached files)';
   const attCtx       = buildAttachmentContext(attachments);
   const userText     = attCtx ? `${trimmed}\n\n${attCtx}` : trimmed || '(see attached files)';
-  const msgContent   = buildMultimodalContent(userText, attachments);
+  // Pass the model so image binary is only embedded for vision-capable models
+  const msgContent   = buildMultimodalContent(userText, attachments, chosenModel.api_id);
 
   state.messages.push({ role: 'user', content: msgContent });
 
@@ -1731,21 +1751,6 @@ async function sendMessage(text) {
       { role: 'system', content: fullSys },
       ...state.messages,
     ];
-
-    // Orchestrator: lock the active task before the model sees anything
-    orchSetTask(trimmed);
-
-    // Pick the right model tier for this message
-    let chosenModel = routeModel(trimmed, 'auto');
-
-    // Auto-route to Gemma if images are attached and the active model can't process them
-    const hasImages = attachments.some(a => a.type === 'image' || a.type === 'large-image');
-    if (hasImages && !VISION_MODELS.has(chosenModel.api_id)) {
-      if (state.modelCfg?.provider === 'openrouter') {
-        chosenModel = { ...state.modelCfg, api_id: VISION_FALLBACK, display: 'Gemma 3 🖼️ vision' };
-      }
-      // (other providers like openai already have vision in their models — no override needed)
-    }
 
     showRoutedBadge(chosenModel);
 
