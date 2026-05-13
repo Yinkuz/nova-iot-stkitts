@@ -29,6 +29,14 @@ jobs:
         working-directory: iot-sk-coder/desktop
         run: npm ci
 
+      - name: Stamp version from tag
+        working-directory: iot-sk-coder/desktop
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
       - name: Build Windows installer
         working-directory: iot-sk-coder/desktop
         run: npx electron-builder --win --x64
@@ -56,6 +64,13 @@ jobs:
       - name: Install Node dependencies
         working-directory: iot-sk-coder/desktop
         run: npm ci
+
+      - name: Stamp version from tag
+        working-directory: iot-sk-coder/desktop
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Build macOS DMG (Intel + Apple Silicon)
         working-directory: iot-sk-coder/desktop

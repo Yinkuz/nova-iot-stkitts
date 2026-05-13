@@ -41,4 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Open URL in system browser (used by preview pane external button)
   openExternal:  (url)             => ipcRenderer.invoke('open-external',    url),
+
+  // App version (reads from package.json via Electron)
+  getVersion:    ()                => ipcRenderer.invoke('get-app-version'),
 });

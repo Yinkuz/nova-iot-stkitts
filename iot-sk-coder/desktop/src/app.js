@@ -3326,6 +3326,15 @@ async function boot() {
     if (p) state.paths = p;
   } catch {}
 
+  // Stamp the real app version into the sidebar label
+  try {
+    const v = await window.electronAPI?.getVersion();
+    if (v) {
+      const lbl = document.getElementById('app-version-label');
+      if (lbl) lbl.textContent = `IOT St. Kitts · v${v}`;
+    }
+  } catch {}
+
   // Brief wait for IPC to fire before we start polling
   await sleep(300);
 

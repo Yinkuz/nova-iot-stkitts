@@ -376,6 +376,9 @@ ipcMain.handle('send-cmd-input', (_e, { id, text }) => {
   return { ok: false };
 });
 
+// ── IPC — app version ────────────────────────────────────────────────────────
+ipcMain.handle('get-app-version', () => app.getVersion());
+
 // ── IPC — path utilities ──────────────────────────────────────────────────────
 ipcMain.handle('home-dir',     ()           => app.getPath('home'));
 ipcMain.handle('resolve-path', (_e, b, r)   => path.resolve(b, r));
