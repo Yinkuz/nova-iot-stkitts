@@ -1885,6 +1885,54 @@ body {
 .theme-dot.active { border-color: var(--text-1); transform: scale(1.15); }
 
 /* ── Auto-routed model badge ─────────────────────────────────────────────── */
+/* ── Orchestrator task bar ───────────────────────────────────────────────── */
+#orch-task-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  background: rgba(99, 102, 241, 0.07);
+  border-bottom: 1px solid rgba(99, 102, 241, 0.18);
+  font-size: 11px;
+  color: #a5b4fc;
+  overflow: hidden;
+  animation: fadeIn .2s ease;
+}
+#orch-task-bar.hidden { display: none; }
+.orch-icon  { flex-shrink: 0; font-size: 12px; }
+.orch-label { flex-shrink: 0; opacity: .6; font-variant: small-caps; letter-spacing: .04em; }
+#orch-task-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  opacity: .9;
+}
+#orch-task-clear {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #a5b4fc;
+  opacity: .45;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+}
+#orch-task-clear:hover { opacity: 1; }
+
+/* ── Orchestrator drift warning ──────────────────────────────────────────── */
+#orch-drift-warning {
+  padding: 5px 14px;
+  background: rgba(234, 179, 8, 0.09);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.25);
+  font-size: 12px;
+  color: #fbbf24;
+  animation: fadeIn .25s ease;
+}
+#orch-drift-warning.hidden { display: none; }
+
 #routed-badge {
   font-size: 10px;
   padding: 1px 6px;

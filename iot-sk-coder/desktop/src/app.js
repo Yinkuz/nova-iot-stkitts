@@ -173,6 +173,80 @@ function routeModel(text = '', mode = 'auto') {
     : { ...cfg, api_id: fastId, display: fastId.split('/').pop() };
 }
 
+// ── Orchestrator ──────────────────────────────────────────────────────────────
+// Tracks the user's active task and validates each NOVA response against it.
+// The check is async and non-blocking — it never delays the main response.
+
+/**
+ * Called from sendMessage() with every user message.
+ * Very short messages (< 12 chars) are treated as clarifications, not new tasks.
+ */
+function orchSetTask(text) {
+  if (!text || text.startsWith('/') || text.length < 12) return;
+  state.orchestrator.activeTask = text.length > 160 ? text.slice(0, 160) + '…' : text;
+  renderTaskBar();
+}
+
+/** Update the task-bar strip below the chat header. */
+function renderTaskBar() {
+  const bar   = document.getElementById('orch-task-bar');
+  const label = document.getElementById('orch-task-text');
+  if (!bar || !label) return;
+  if (state.orchestrator.activeTask) {
+    label.textContent = state.orchestrator.activeTask;
+    bar.classList.remove('hidden');
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+/**
+ * Async drift check — fires after NOVA's response arrives.
+ * Uses the cheapest available model to ask: "Did NOVA address the task?"
+ * If the answer is NO, shows a dismissible warning strip.
+ */
+async function orchCheckDrift(task, response) {
+  if (!state.modelCfg || !task || response.length < 80) return;
+  if (state.modelCfg.provider !== 'openrouter') return;   // OpenAI/Ollama skip — models reliable enough
+
+  const checker = {
+    ...state.modelCfg,
+    api_id:  'deepseek/deepseek-v4-flash',
+    display: 'orchestrator',
+  };
+
+  const msgs = [
+    { role: 'system', content: 'You are a strict task supervisor. Respond with exactly one word: YES or NO.' },
+    { role: 'user',   content: `User's current task:\n"${task}"\n\nNOVA's response (first 500 chars):\n"${response.slice(0, 500)}"\n\nDid NOVA's response work on the user's current task? YES or NO.` },
+  ];
+
+  let answer = '';
+  try {
+    await streamChat(
+      msgs, checker,
+      (_c, acc) => { answer = acc; },
+      (final)   => { answer = final; },
+      ()        => {},
+      undefined,
+      ()        => {},
+    );
+    if (answer.trim().toUpperCase().startsWith('NO')) {
+      state.orchestrator.driftWarnings++;
+      showDriftWarning(task);
+    }
+  } catch { /* orchestrator is non-critical — swallow all errors silently */ }
+}
+
+/** Show the drift warning strip for 14 seconds. */
+function showDriftWarning(task) {
+  const w = document.getElementById('orch-drift-warning');
+  if (!w) return;
+  const preview = task.length > 90 ? task.slice(0, 90) + '…' : task;
+  w.innerHTML = `🎯 <strong>Orchestrator:</strong> NOVA may have drifted from your task — <em>"${preview}"</em>`;
+  w.classList.remove('hidden');
+  setTimeout(() => w.classList.add('hidden'), 14_000);
+}
+
 // Active abort controller for the current streaming response
 let _abortCtrl = null;
 
@@ -203,6 +277,7 @@ const state = {
   ctxSummary:   '',          // auto-generated summary of compressed old turns
   gitCtx:       null,        // {branch, status, diff_stat, log} or null
   paths:        { novaRoot: '', openDesign: '', desktopDir: '', homeDir: '' },
+  orchestrator: { activeTask: null, driftWarnings: 0 },
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -1657,6 +1732,9 @@ async function sendMessage(text) {
       ...state.messages,
     ];
 
+    // Orchestrator: lock the active task before the model sees anything
+    orchSetTask(trimmed);
+
     // Pick the right model tier for this message
     let chosenModel = routeModel(trimmed, 'auto');
 
@@ -1682,6 +1760,8 @@ async function sendMessage(text) {
         _lastNovaCard = novaCard;
         attachRetryButton(novaCard);
         finishResponse();
+        // Orchestrator drift check — async, never blocks the UI
+        orchCheckDrift(state.orchestrator.activeTask, final);
       },
       (err) => {
         updateLastMessage(novaCard, `⚠ ${err}`, true);
@@ -2483,6 +2563,16 @@ def execute(args: dict, workspace: str) -> str:
     sys += '\n';
   }
 
+  // ── Orchestrator task lock (injected last — high recency salience) ───────────
+  if (state.orchestrator.activeTask) {
+    sys += `## 🎯 ORCHESTRATOR — Active Task Lock\n`;
+    sys += `The user's current active task is:\n> **"${state.orchestrator.activeTask}"**\n\n`;
+    sys += `CRITICAL RULE: Work on THIS task only. Do NOT pick up, resume, or reference any previous `;
+    sys += `unrelated task from conversation history (e.g. an old landing page, a different project, `;
+    sys += `a previous session's work). The most recent user message is always the authoritative task.\n`;
+    sys += `If your response would not address the task above, stop and re-read the latest user message.\n\n`;
+  }
+
   return sys;
 }
 
@@ -2705,6 +2795,9 @@ async function clearChat() {
   _lastNovaCard    = null;
   el.messages.innerHTML = '';
   state.sessionNum++;
+  state.orchestrator.activeTask   = null;
+  state.orchestrator.driftWarnings = 0;
+  renderTaskBar();
   updateSessionHeader();
   updateContextMeter();   // reset meter to 0
   addMessage('system-note', 'Conversation cleared. Brain and workspace are kept.');
@@ -3035,6 +3128,12 @@ $('tb-close').addEventListener('click', () => {
   }
 });
 el.newSessionBtn.addEventListener('click', () => clearChat());
+
+// Orchestrator — clear-task button
+document.getElementById('orch-task-clear')?.addEventListener('click', () => {
+  state.orchestrator.activeTask = null;
+  renderTaskBar();
+});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DISPLAY HELPERS

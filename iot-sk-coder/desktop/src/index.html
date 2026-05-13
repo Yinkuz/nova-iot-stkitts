@@ -216,6 +216,16 @@
           </div>
         </div>
 
+        <!-- Orchestrator task bar — shows the active task lock -->
+        <div id="orch-task-bar" class="hidden">
+          <span class="orch-icon">🎯</span>
+          <span class="orch-label">Task:</span>
+          <span id="orch-task-text"></span>
+          <button id="orch-task-clear" title="Clear task lock (done with this task)">✕</button>
+        </div>
+        <!-- Orchestrator drift warning — flashes when NOVA may have gone off-task -->
+        <div id="orch-drift-warning" class="hidden"></div>
+
         <div id="messages-wrap">
           <div id="messages"></div>
           <!-- Drag-and-drop overlay -->
