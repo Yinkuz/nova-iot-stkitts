@@ -1934,7 +1934,7 @@ class Handler(BaseHTTPRequestHandler):
 
             current_messages = list(messages)
 
-            for _round in range(8):   # max 8 tool-call rounds
+            for _round in range(25):   # max 25 tool-call rounds (raised from 8 for complex multi-step workflows)
                 kwargs: dict = dict(
                     model      = api_id,
                     messages   = current_messages,
@@ -2009,8 +2009,28 @@ class Handler(BaseHTTPRequestHandler):
                                 if tc.function.arguments:
                                     tool_calls_acc[idx]["args_str"] += tc.function.arguments
 
-                # No tool calls → we're done
+                # No tool calls → check whether the model paused mid-task before breaking
                 if finish_reason != "tool_calls" or not tool_calls_acc:
+                    # Detect prose that signals the model plans more work but forgot to call tools
+                    _continuation_triggers = [
+                        "now i'll", "now i need", "next i'll", "next i need",
+                        "let me now", "i'll now", "i need to run", "i need to write",
+                        "i'll run", "i'll write", "i'll create", "i'll git",
+                        "i'll commit", "i'll add", "i'll test", "i'll save",
+                        "now let's", "let's now", "now run", "now write",
+                        "step ", "next step", "finally,", "lastly,",
+                    ]
+                    _lower = full_text.lower()
+                    _mid_task = any(t in _lower for t in _continuation_triggers)
+                    if _mid_task and _round < 20:
+                        # Model paused mid-task — nudge it to continue with tools
+                        current_messages = current_messages + [
+                            {"role": "assistant", "content": full_text or ""},
+                            {"role": "user",      "content":
+                             "Continue. Execute ALL remaining steps now using tool calls — "
+                             "do not describe them, just do them one after another."},
+                        ]
+                        continue  # re-enter the loop
                     break
 
                 # Execute each tool and gather results
