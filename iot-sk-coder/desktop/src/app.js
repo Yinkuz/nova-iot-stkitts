@@ -114,8 +114,6 @@ const CTX_WINDOWS = {
   'qwen/qwen3-coder-flash':                      128,
   'google/gemini-3.1-flash-lite':              1_000,
   'openai/gpt-oss-120b':                         128,
-  'deepseek/deepseek-v4-pro':                    128,
-  'deepseek/deepseek-v4-flash':                  128,
 };
 
 // ── Vision model routing ──────────────────────────────────────────────────────
@@ -209,9 +207,11 @@ async function orchCheckDrift(task, response) {
   if (!state.modelCfg || !task || response.length < 80) return;
   if (state.modelCfg.provider !== 'openrouter') return;   // OpenAI/Ollama skip — models reliable enough
 
+  // Use the user's own fast-tier model (or their active model) — never a
+  // hardcoded ID that may not exist on their provider/account.
   const checker = {
     ...state.modelCfg,
-    api_id:  'deepseek/deepseek-v4-flash',
+    api_id:  FAST_MODEL_MAP[state.modelCfg.api_id] || state.modelCfg.api_id,
     display: 'orchestrator',
   };
 
@@ -229,6 +229,7 @@ async function orchCheckDrift(task, response) {
       ()        => {},
       undefined,
       ()        => {},
+      { useTools: false },   // supervisor answers YES/NO — must never run tools
     );
     if (answer.trim().toUpperCase().startsWith('NO')) {
       state.orchestrator.driftWarnings++;
@@ -242,7 +243,7 @@ function showDriftWarning(task) {
   const w = document.getElementById('orch-drift-warning');
   if (!w) return;
   const preview = task.length > 90 ? task.slice(0, 90) + '…' : task;
-  w.innerHTML = `🎯 <strong>Orchestrator:</strong> NOVA may have drifted from your task — <em>"${preview}"</em>`;
+  w.innerHTML = `🎯 <strong>Orchestrator:</strong> NOVA may have drifted from your task — <em>"${escapeHtml(preview)}"</em>`;
   w.classList.remove('hidden');
   setTimeout(() => w.classList.add('hidden'), 14_000);
 }
@@ -608,16 +609,17 @@ function renderAttachmentChips() {
     const chip = document.createElement('div');
     chip.className = `att-chip att-${att.type}`;
 
+    const safeName = escapeHtml(att.name);
     if (att.type === 'image') {
       const sizeLabel = att.isLarge
         ? `${_fmtSize(att.size)} · ${att.width}×${att.height} <span class="att-large-tag">thumb</span>`
         : _fmtSize(att.size);
-      chip.innerHTML = `<img src="${att.preview}" class="att-thumb" alt="${att.name}"/><span class="att-name" title="${att.name}">${att.name}</span><span class="att-size">${sizeLabel}</span><button class="att-remove" title="Remove">✕</button>`;
+      chip.innerHTML = `<img src="${att.preview}" class="att-thumb" alt="${safeName}"/><span class="att-name" title="${safeName}">${safeName}</span><span class="att-size">${sizeLabel}</span><button class="att-remove" title="Remove">✕</button>`;
     } else if (att.type === 'folder') {
-      chip.innerHTML = `<span class="att-icon">📁</span><span class="att-name" title="${att.name}">${att.name}</span><span class="att-size">${att.files?.length || 0} files</span><button class="att-remove" title="Remove">✕</button>`;
+      chip.innerHTML = `<span class="att-icon">📁</span><span class="att-name" title="${safeName}">${safeName}</span><span class="att-size">${att.files?.length || 0} files</span><button class="att-remove" title="Remove">✕</button>`;
     } else {
       const icon = att.type === 'code' ? '📄' : '📎';
-      chip.innerHTML = `<span class="att-icon">${icon}</span><span class="att-name" title="${att.name}">${att.name}</span><span class="att-size">${_fmtSize(att.size)}</span><button class="att-remove" title="Remove">✕</button>`;
+      chip.innerHTML = `<span class="att-icon">${icon}</span><span class="att-name" title="${safeName}">${safeName}</span><span class="att-size">${_fmtSize(att.size)}</span><button class="att-remove" title="Remove">✕</button>`;
     }
 
     chip.querySelector('.att-remove').addEventListener('click', () => {
@@ -736,7 +738,7 @@ async function api(path, body = null) {
   return r.json();
 }
 
-async function streamChat(messages, modelCfg, onChunk, onDone, onError, signal, onToolEvent) {
+async function streamChat(messages, modelCfg, onChunk, onDone, onError, signal, onToolEvent, opts = {}) {
   let fullText = '';
   try {
     const resp = await fetch(BRIDGE + '/chat', {
@@ -746,10 +748,16 @@ async function streamChat(messages, modelCfg, onChunk, onDone, onError, signal, 
         messages,
         model_cfg: modelCfg,
         workspace: state.workspace || undefined,
-        use_tools: true,
+        use_tools: opts.useTools !== false,
       }),
       signal,  // AbortController signal — undefined = no cancellation
     });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      onError(`Bridge error ${resp.status}${detail ? ': ' + detail.slice(0, 200) : ''}`);
+      return;
+    }
+    if (!resp.body) { onError('No response stream from bridge.'); return; }
     const reader  = resp.body.getReader();
     const decoder = new TextDecoder();
     let   buf     = '';
@@ -762,7 +770,9 @@ async function streamChat(messages, modelCfg, onChunk, onDone, onError, signal, 
       buf = parts.pop();
       for (const part of parts) {
         if (!part.startsWith('data: ')) continue;
-        const json = JSON.parse(part.slice(6));
+        let json;
+        try { json = JSON.parse(part.slice(6)); }
+        catch { continue; }   // one malformed event must not kill the stream
         if (json.error)            { onError(json.error); return; }
         if (json.done)             { onDone(fullText);     return; }
         if (json.text)             { fullText += json.text; onChunk(json.text, fullText); }
@@ -950,6 +960,17 @@ function escapeHtml(s) {
   return String(s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Remove a wrapping markdown code fence from model output that should be raw file content
+function stripCodeFences(text) {
+  let t = (text || '').trim();
+  if (!t.startsWith('```')) return text;
+  const firstNl = t.indexOf('\n');
+  if (firstNl === -1) return text;
+  t = t.slice(firstNl + 1);
+  if (t.trimEnd().endsWith('```')) t = t.trimEnd().slice(0, -3);
+  return t;
 }
 
 // Try to detect a file path from the first comment line of a code block
@@ -1185,9 +1206,11 @@ function diffLines(oldText, newText) {
 }
 
 let _diffConfirmCb = null;
+let _diffCancelCb  = null;
 
-function showDiffOverlay(filePath, oldContent, newContent, onConfirm) {
+function showDiffOverlay(filePath, oldContent, newContent, onConfirm, onCancel = null) {
   _diffConfirmCb = onConfirm;
+  _diffCancelCb  = onCancel;
 
   const hunks   = diffLines(oldContent, newContent);
   const overlay = document.getElementById('diff-overlay');
@@ -1214,20 +1237,23 @@ function showDiffOverlay(filePath, oldContent, newContent, onConfirm) {
     `📝 Review Changes  (+${adds} / -${dels} lines)`;
 }
 
-function hideDiffOverlay() {
+function hideDiffOverlay(cancelled = true) {
   document.getElementById('diff-overlay').classList.add('hidden');
+  const cancelCb = cancelled ? _diffCancelCb : null;
   _diffConfirmCb = null;
+  _diffCancelCb  = null;
+  if (cancelCb) cancelCb();   // let waiting flows (agent loop) resume on cancel
 }
 
 // Wire up diff overlay buttons (called once at boot)
 function initDiffOverlay() {
   document.getElementById('diff-confirm-btn').addEventListener('click', async () => {
     const cb = _diffConfirmCb;
-    hideDiffOverlay();
+    hideDiffOverlay(false);
     if (cb) await cb();
   });
-  document.getElementById('diff-cancel-btn').addEventListener('click', hideDiffOverlay);
-  document.getElementById('diff-close-x').addEventListener('click',    hideDiffOverlay);
+  document.getElementById('diff-cancel-btn').addEventListener('click', () => hideDiffOverlay());
+  document.getElementById('diff-close-x').addEventListener('click',    () => hideDiffOverlay());
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1348,7 +1374,7 @@ async function initTerminal() {
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter')     { sendFn(); return; }
-    if (e.key === 'ArrowUp')   { e.preventDefault(); input.value = termHistory[++termHistIdx] || ''; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); termHistIdx = Math.min(termHistory.length - 1, termHistIdx + 1); input.value = termHistory[termHistIdx] || ''; }
     if (e.key === 'ArrowDown') { e.preventDefault(); termHistIdx = Math.max(-1, termHistIdx - 1); input.value = termHistory[termHistIdx] || ''; }
   });
   document.getElementById('term-send-btn').addEventListener('click', sendFn);
@@ -1586,19 +1612,25 @@ async function executeAgentBrief(brief) {
       );
     });
 
+    // Models often wrap the file in a markdown fence despite instructions
+    newContent = stripCodeFences(newContent);
+
     updateLastMessage(agentCard, `New version of \`${filePath}\` ready — review diff below.`, true);
 
-    // Show diff and wait for user to confirm before continuing
+    // Show diff and wait for the user to confirm OR cancel before continuing
     await new Promise((resolve) => {
-      showDiffOverlay(filePath, currentContent, newContent, async () => {
-        const r = await window.electronAPI?.writeFile(filePath, newContent);
-        addMessage('system-note', r?.ok ? `✓ Written: ${filePath}` : `✕ Failed: ${r?.error}`);
-        resolve();
-      });
-      // Also resolve if user cancels
-      const origHide = hideDiffOverlay;
-      document.getElementById('diff-cancel-btn')._agentResolve = resolve;
-      document.getElementById('diff-close-x')._agentResolve    = resolve;
+      showDiffOverlay(
+        filePath, currentContent, newContent,
+        async () => {
+          const r = await window.electronAPI?.writeFile(filePath, newContent);
+          addMessage('system-note', r?.ok ? `✓ Written: ${filePath}` : `✕ Failed: ${r?.error}`);
+          resolve();
+        },
+        () => {
+          addMessage('system-note', `⏭ Skipped: ${filePath} (change rejected)`);
+          resolve();
+        },
+      );
     });
   }
 
@@ -1629,14 +1661,15 @@ function addMessage(role, content, opts = {}) {
         for (const img of imgs) {
           const dimLabel = img.isLarge && img.width
             ? ` · ${img.width}×${img.height} (thumbnail)` : '';
-          attHtml += `<img src="${img.preview}" class="msg-att-img" alt="${img.name}" title="${img.name}${dimLabel}" onclick="this.requestFullscreen?.()"/>`;
+          const safeImgName = escapeHtml(img.name);
+          attHtml += `<img src="${img.preview}" class="msg-att-img" alt="${safeImgName}" title="${safeImgName}${dimLabel}" onclick="this.requestFullscreen?.()"/>`;
           if (img.isLarge) {
             attHtml += `<div class="msg-att-large-tag">⬆ ${_fmtSize(img.size)} original · thumbnail shown to AI</div>`;
           }
         }
         for (const f of files) {
           const icon = f.type === 'folder' ? '📁' : '📄';
-          const label = f.type === 'folder' ? `${f.name} (${f.files?.length || 0} files)` : `${f.name} · ${_fmtSize(f.size)}`;
+          const label = f.type === 'folder' ? `${escapeHtml(f.name)} (${f.files?.length || 0} files)` : `${escapeHtml(f.name)} · ${_fmtSize(f.size)}`;
           attHtml += `<div class="msg-att-file">${icon} ${label}</div>`;
         }
         attHtml += '</div>';
@@ -1693,6 +1726,12 @@ async function sendMessage(text) {
   // Handle slash commands (attachments not relevant for commands)
   const trimmed = text.trim();
   if (trimmed.startsWith('/') && !state.attachments.length) { handleCommand(trimmed); return; }
+
+  // No model configured yet — routeModel would return null and crash below
+  if (!state.modelCfg) {
+    addMessage('system-note', 'No AI model configured yet — type /model to pick a provider and model.');
+    return;
+  }
 
   // Snapshot attachments, then clear them
   const attachments = [...state.attachments];
@@ -2216,7 +2255,8 @@ async function regenerateResponse(card) {
       attachRetryButton(card);
       finishResponse();
     },
-    _abortCtrl.signal
+    _abortCtrl.signal,
+    (toolEvt) => renderToolEvent(card, toolEvt)
   );
 }
 
@@ -2338,9 +2378,9 @@ You work exclusively with the IOT St. Kitts engineering team. Be concise, direct
 Every assignment that produces files MUST get its own clearly-named folder **before** any files are written. Never drop loose files directly on the Desktop or in a generic location.
 
 **Rules:**
-- **First action for any new task** = create the project folder with `run_command mkdir -p <path>` then write all files inside it.
-- **Folder naming:** use a short, descriptive slug matching the task — e.g. `email-signature-johnson`, `expense-tracker`, `api-project`, `landing-page-pulseflow`. Use hyphens, lowercase, no spaces.
-- **Default location:** `C:\Users\IOT\Desktop\<folder-name>\` unless the user specifies otherwise or a workspace folder is already set.
+- **First action for any new task** = create the project folder with \`run_command mkdir -p <path>\` then write all files inside it.
+- **Folder naming:** use a short, descriptive slug matching the task — e.g. \`email-signature-johnson\`, \`expense-tracker\`, \`api-project\`, \`landing-page-pulseflow\`. Use hyphens, lowercase, no spaces.
+- **Default location:** \`C:\\Users\\IOT\\Desktop\\<folder-name>\\\` unless the user specifies otherwise or a workspace folder is already set.
 - **Follow-up tasks** on an existing assignment go into the same folder — check the "Last touched:" footer to find it.
 - **Exception:** if the user explicitly says "save to Desktop" or gives a full path, use exactly that path.
 
@@ -2633,7 +2673,6 @@ async function compressContext() {
   // Take the oldest 40% of messages and summarise them
   const cutoff  = Math.max(4, Math.floor(state.messages.length * 0.4));
   const oldMsgs = state.messages.slice(0, cutoff);
-  const keepMsgs = state.messages.slice(cutoff);
 
   // Build a minimal text representation of the old turns to send to the model
   const convoText = oldMsgs.map(m => {
@@ -2658,16 +2697,20 @@ async function compressContext() {
       streamChat(summaryReq, state.modelCfg,
         (_chunk, acc) => { summary = acc; },
         () => resolve(),
-        () => resolve()
+        () => resolve(),
+        undefined,
+        undefined,
+        { useTools: false }   // summariser must never execute tools
       );
     });
   } catch { /* best-effort */ }
 
   if (!summary.trim()) return;
 
-  // Replace the old turns with a compressed summary message
+  // Replace the old turns with a compressed summary message.
+  // Re-slice from the live array — messages added while summarising must survive.
   state.ctxSummary = (state.ctxSummary ? state.ctxSummary + '\n\n' : '') + summary.trim();
-  state.messages   = keepMsgs;
+  state.messages   = state.messages.slice(cutoff);
   updateContextMeter();
   addMessage('system-note', `⟳ Context compressed (${cutoff} turns → summary). Full history still in Brain.`);
 }
@@ -3013,14 +3056,15 @@ function showBriefPanel(brief) {
   title.textContent = '⚡ Agent Task Brief';
   el.briefBody.appendChild(title);
 
-  row('Task', brief.task || '—');
+  // Brief content is model-generated — escape before injecting as HTML
+  row('Task', escapeHtml(brief.task || '—'));
 
   if (brief.context?.length) {
-    const ul = '<ul>' + brief.context.map(c => `<li>${c}</li>`).join('') + '</ul>';
+    const ul = '<ul>' + brief.context.map(c => `<li>${escapeHtml(c)}</li>`).join('') + '</ul>';
     row('Context', ul);
   }
   if (brief.files?.length) {
-    row('Files', brief.files.map(f => `<code>${f}</code>`).join('<br>'));
+    row('Files', brief.files.map(f => `<code>${escapeHtml(f)}</code>`).join('<br>'));
   }
 
   // Show in chat AND open panel

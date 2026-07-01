@@ -24,7 +24,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import questionary
+# questionary is only needed by the interactive CLI picker — the desktop bridge
+# imports this module for make_client() and must not die if it's absent.
+try:
+    import questionary
+    from questionary import Style as QStyle
+except ImportError:          # pragma: no cover
+    questionary = None
+    QStyle = None
 
 # ── ChatGPT OAuth (Codex) helpers ─────────────────────────────────────────────
 
@@ -108,7 +115,6 @@ def get_codex_status() -> dict:
         }
     except Exception as exc:
         return {"authenticated": False, "error": str(exc)}
-from questionary import Style as QStyle
 
 # ── Model catalogue ───────────────────────────────────────────────────────────
 
@@ -172,13 +178,15 @@ _Q_STYLE = QStyle([
     ("highlighted", "fg:cyan bold"),
     ("selected",    "fg:cyan"),
     ("separator",   "fg:cyan"),
-])
+]) if QStyle else None
 
 
 # ── Interactive model picker ──────────────────────────────────────────────────
 
 def pick_model(current_id: str | None = None) -> dict | None:
     """Full interactive wizard → returns model_cfg dict or None if cancelled."""
+    if questionary is None:
+        raise RuntimeError("questionary is not installed — run: pip install questionary rich")
     from rich.console import Console
     from rich.rule import Rule
     con = Console(highlight=False)

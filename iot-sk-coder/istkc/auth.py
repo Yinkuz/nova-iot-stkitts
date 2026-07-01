@@ -24,8 +24,14 @@ import os
 import time
 from pathlib import Path
 
-import questionary
-from questionary import Style as QStyle
+# questionary is only needed by the interactive CLI flow — the desktop bridge
+# imports this module for the token helpers and must not die if it's absent.
+try:
+    import questionary
+    from questionary import Style as QStyle
+except ImportError:          # pragma: no cover
+    questionary = None
+    QStyle = None
 
 from .brain import DATA_DIR
 
@@ -42,7 +48,7 @@ _Q_STYLE = QStyle([
     ("answer",      "fg:cyan bold"),
     ("pointer",     "fg:cyan bold"),
     ("highlighted", "fg:cyan bold"),
-])
+]) if QStyle else None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -88,6 +94,8 @@ def ensure_access(console=None) -> bool:
     Verify team token and API key.  Returns True when access is granted.
     Prompts the user interactively when credentials are missing or expired.
     """
+    if questionary is None:
+        raise RuntimeError("questionary is not installed — run: pip install questionary rich")
     from rich.console import Console
     from rich.panel import Panel
     from rich import box

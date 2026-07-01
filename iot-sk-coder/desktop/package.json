@@ -1,6 +1,6 @@
 {
   "name": "nova-iot-stkitts",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "NOVA — IOT St. Kitts internal AI coding assistant",
   "author": "IOT St. Kitts Engineering <engineering@iotstkitts.com>",
   "private": true,
