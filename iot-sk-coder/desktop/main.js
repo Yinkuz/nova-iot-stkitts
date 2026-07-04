@@ -46,22 +46,31 @@ function checkExistingBridge(port) {
 function killStalePort(port) {
   return new Promise((resolve) => {
     const { exec } = require('child_process');
-    // Windows: find PID listening on the port, kill it
-    exec(`netstat -ano 2>nul | findstr ":${port} " | findstr LISTENING`, (err, stdout) => {
-      if (err || !stdout.trim()) return resolve();
-      const lines = stdout.trim().split('\n');
-      const pids  = new Set();
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        const pid   = parts[parts.length - 1];
-        if (pid && pid !== '0') pids.add(pid);
-      }
-      if (pids.size === 0) return resolve();
-      // Kill all matching PIDs, then wait briefly for the port to release
-      exec(`taskkill /F ${[...pids].map(p => `/PID ${p}`).join(' ')}`, () => {
-        setTimeout(resolve, 500);   // give OS time to release the port
+    if (process.platform === 'win32') {
+      // Windows: find PID listening on the port, kill it
+      exec(`netstat -ano 2>nul | findstr ":${port} " | findstr LISTENING`, (err, stdout) => {
+        if (err || !stdout.trim()) return resolve();
+        const lines = stdout.trim().split('\n');
+        const pids  = new Set();
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/);
+          const pid   = parts[parts.length - 1];
+          if (pid && pid !== '0') pids.add(pid);
+        }
+        if (pids.size === 0) return resolve();
+        // Kill all matching PIDs, then wait briefly for the port to release
+        exec(`taskkill /F ${[...pids].map(p => `/PID ${p}`).join(' ')}`, () => {
+          setTimeout(resolve, 500);   // give OS time to release the port
+        });
       });
-    });
+    } else {
+      // macOS / Linux
+      exec(`lsof -ti tcp:${port}`, (err, stdout) => {
+        const pids = (stdout || '').trim().split('\n').filter(Boolean);
+        if (err || !pids.length) return resolve();
+        exec(`kill -9 ${pids.join(' ')}`, () => setTimeout(resolve, 500));
+      });
+    }
   });
 }
 
@@ -246,6 +255,18 @@ ipcMain.handle('read-file', async (_e, filePath) => {
     const buf = fs.readFileSync(filePath);
     return { type: 'image', content: buf.toString('base64'), mime, size: buf.length };
   }
+  // Text files: cap what we load so a huge log/binary can't freeze the app
+  const MAX_TEXT_BYTES = 4 * 1024 * 1024;   // 4 MB
+  const tstat = fs.statSync(filePath);
+  if (tstat.size > MAX_TEXT_BYTES) {
+    const fd  = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(MAX_TEXT_BYTES);
+    const n   = fs.readSync(fd, buf, 0, MAX_TEXT_BYTES, 0);
+    fs.closeSync(fd);
+    const content = buf.toString('utf-8', 0, n)
+      + `\n\n[... file truncated — ${(tstat.size / (1024 * 1024)).toFixed(1)} MB total, first 4 MB shown]`;
+    return { type: 'text', content, size: tstat.size, truncated: true };
+  }
   const content = fs.readFileSync(filePath, 'utf-8');
   return { type: 'text', content, size: Buffer.byteLength(content, 'utf-8') };
 });
@@ -366,7 +387,17 @@ ipcMain.handle('run-command', (event, { cmd, cwd, id }) => {
 
 ipcMain.handle('kill-command', (_e, id) => {
   const proc = _runningCmds.get(id);
-  if (proc) { proc.kill('SIGTERM'); _runningCmds.delete(id); return { ok: true }; }
+  if (proc) {
+    if (process.platform === 'win32') {
+      // cmd.exe spawns children — kill the whole tree or the real process survives
+      const { exec } = require('child_process');
+      exec(`taskkill /PID ${proc.pid} /T /F`);
+    } else {
+      proc.kill('SIGTERM');
+    }
+    _runningCmds.delete(id);
+    return { ok: true };
+  }
   return { ok: false };
 });
 

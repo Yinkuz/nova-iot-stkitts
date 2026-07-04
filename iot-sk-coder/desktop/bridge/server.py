@@ -826,6 +826,20 @@ _BASE_TOOLS = [
 
 # ── Tool executor ─────────────────────────────────────────────────────────────
 
+def _strip_md_fences(text: str) -> str:
+    """Remove a wrapping markdown code fence from output meant to be raw file content."""
+    t = text.strip()
+    if not t.startswith("```"):
+        return text
+    first_nl = t.find("\n")
+    if first_nl == -1:
+        return text
+    t = t[first_nl + 1:]
+    if t.rstrip().endswith("```"):
+        t = t.rstrip()[:-3]
+    return t
+
+
 def _resolve(p: str, workspace: str) -> Path:
     """Resolve p relative to workspace if not absolute."""
     path = Path(p)
@@ -1234,29 +1248,46 @@ def _execute_tool(name: str, args: dict, workspace: str) -> str:
             cfg = _load_cfg().get("model_cfg", {})
             api_key = cfg.get("api_key", "")
 
-            payload = {
-                "model": "google/gemma-4-26b-a4b-it:free",
-                "messages": [{"role": "user", "content": gemma_prompt}],
-                "max_tokens": 2048,
-            }
-            req = _req.Request(
-                "https://openrouter.ai/api/v1/chat/completions",
-                data=_json.dumps(payload).encode(),
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "http://localhost",
-                    "X-Title": "NOVA-web-browse",
-                },
-            )
-            with _req.urlopen(req, timeout=60) as resp:
-                data = _json.loads(resp.read())
+            # Try a free Gemma first, then the user's own model; if synthesis is
+            # unavailable, return the raw fetched content instead of an error so
+            # the calling model still gets the research material.
+            _synth_models = ["google/gemma-3-27b-it:free"]
+            if cfg.get("provider") == "openrouter" and cfg.get("api_id"):
+                _synth_models.append(cfg["api_id"])
 
-            answer = data["choices"][0]["message"]["content"] or ""
+            answer = ""
+            for _synth_model in _synth_models:
+                try:
+                    payload = {
+                        "model": _synth_model,
+                        "messages": [{"role": "user", "content": gemma_prompt}],
+                        "max_tokens": 2048,
+                    }
+                    req = _req.Request(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        data=_json.dumps(payload).encode(),
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": "http://localhost",
+                            "X-Title": "NOVA-web-browse",
+                        },
+                    )
+                    with _req.urlopen(req, timeout=60) as resp:
+                        data = _json.loads(resp.read())
+                    answer = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                    if answer:
+                        break
+                except Exception:
+                    continue
+
             sources = "\n".join(f"- {p['url']}" for p in pages)
+            if not answer:
+                # Synthesis unavailable — hand back the raw content
+                answer = f"(synthesis unavailable — raw page content follows)\n\n{pages_text[:6000]}"
             if sources:
                 answer = answer.rstrip() + f"\n\n**Sources:**\n{sources}"
-            return answer or "Gemma returned an empty response."
+            return answer
         except Exception as e:
             return f"web_browse error: {e}"
 
@@ -1725,7 +1756,8 @@ class Handler(BaseHTTPRequestHandler):
         # ── /session ─────────────────────────────────────────────────────────
         elif route == "/session":
             from istkc.brain import SESSIONS_DIR
-            fname = (qs.get("file") or [""])[0]
+            # basename only — the filename comes from the client, block ../ traversal
+            fname = Path((qs.get("file") or [""])[0]).name
             if fname:
                 p = SESSIONS_DIR / fname
                 if p.exists():
@@ -1815,7 +1847,8 @@ class Handler(BaseHTTPRequestHandler):
 
         # ── /screenshots/<file> ───────────────────────────────────────────────
         elif route.startswith("/screenshots/"):
-            fname = route.split("/screenshots/", 1)[1]
+            # basename only — block ../ traversal from the URL path
+            fname = Path(route.split("/screenshots/", 1)[1]).name
             fpath = _SCREENSHOTS_DIR / fname
             if fpath.exists() and fpath.suffix.lower() == ".png":
                 data = fpath.read_bytes()
@@ -1925,12 +1958,19 @@ class Handler(BaseHTTPRequestHandler):
             provider = model_cfg.get("provider", "openai")
             api_id   = model_cfg.get("api_id", "")
 
-            # Tool use: only openai/openrouter; reasoning models (o1/o3) don't support it yet
-            supports_tools = (
-                use_tools
-                and provider in ("openai", "openrouter")
-                and api_id not in ("o1", "o3-mini")
-            )
+            # Tool support: the renderer sends a registry-driven hint per model
+            # (capsFor(api_id).tools). When present it wins — it knows about
+            # tool-capable Ollama/ChatGPT models and tool-less reasoners alike.
+            # Without a hint, fall back to the old provider heuristic.
+            hint = body.get("supports_tools")
+            if hint is not None:
+                supports_tools = bool(use_tools and hint)
+            else:
+                supports_tools = (
+                    use_tools
+                    and provider in ("openai", "openrouter", "chatgpt")
+                    and api_id not in ("o1", "o3-mini")
+                )
 
             current_messages = list(messages)
 
@@ -1946,11 +1986,13 @@ class Handler(BaseHTTPRequestHandler):
                     kwargs["tool_choice"] = "auto"
 
                 # Retry with exponential back-off on transient errors (#1)
-                # Falls back to free models if primary exhausted (#6)
+                # Falls back to free models if primary exhausted (#6).
+                # Fallback IDs are OpenRouter slugs — only usable on that provider;
+                # sending them to OpenAI/Ollama would just 404 repeatedly.
                 _FALLBACKS = [
-                    "google/gemma-2-9b-it:free",
+                    "google/gemma-3-27b-it:free",
                     "mistralai/mistral-7b-instruct:free",
-                ]
+                ] if provider == "openrouter" else []
                 _RETRY_DELAYS = [1, 3, 8]
                 stream = None
                 _last_exc: Exception | None = None
@@ -2011,17 +2053,19 @@ class Handler(BaseHTTPRequestHandler):
 
                 # No tool calls → check whether the model paused mid-task before breaking
                 if finish_reason != "tool_calls" or not tool_calls_acc:
-                    # Detect prose that signals the model plans more work but forgot to call tools
+                    # Detect prose that signals the model plans more work but forgot to call
+                    # tools. Only the TAIL of the response counts — phrases like "step 2"
+                    # or "now I'll" in the middle of a *finished* answer are normal prose,
+                    # and nudging on them made NOVA ramble past a completed task.
                     _continuation_triggers = [
                         "now i'll", "now i need", "next i'll", "next i need",
                         "let me now", "i'll now", "i need to run", "i need to write",
-                        "i'll run", "i'll write", "i'll create", "i'll git",
+                        "i'll run", "i'll write", "i'll create",
                         "i'll commit", "i'll add", "i'll test", "i'll save",
-                        "now let's", "let's now", "now run", "now write",
-                        "step ", "next step", "finally,", "lastly,",
+                        "now let's", "let's now",
                     ]
-                    _lower = full_text.lower()
-                    _mid_task = any(t in _lower for t in _continuation_triggers)
+                    _tail = full_text.lower()[-300:]
+                    _mid_task = bool(full_text) and any(t in _tail for t in _continuation_triggers)
                     if _mid_task and _round < 20:
                         # Model paused mid-task — nudge it to continue with tools
                         current_messages = current_messages + [
@@ -2122,11 +2166,12 @@ class Handler(BaseHTTPRequestHandler):
                 max_tokens=600,
                 temperature=0.2,
             )
-            raw = resp.choices[0].message.content.strip()
-            if "```" in raw:
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+            raw = (resp.choices[0].message.content or "").strip()
+            # Extract the outermost JSON object regardless of any surrounding
+            # prose or markdown fences the model added.
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if m:
+                raw = m.group(0)
             brief = json.loads(raw)
             _send_json(self, {"ok": True, "brief": brief})
         except Exception as exc:
@@ -2155,6 +2200,7 @@ class Handler(BaseHTTPRequestHandler):
 
         results: list[dict] = []
         ctx_str = "\n".join(f"- {c}" for c in ctx)
+        _MAX_REWRITE_CHARS = 24_000   # beyond this a "full rewrite" would silently drop content
 
         for i, file_path in enumerate(files):
             fpath = _resolve(file_path, workspace)
@@ -2169,33 +2215,56 @@ class Handler(BaseHTTPRequestHandler):
                 task.emit(step=i + 1, total=len(files), file=file_path, status="error", error=str(e))
                 continue
 
+            # Guard: never regenerate a file the model can't fully see — the
+            # unseen tail would be destroyed by the rewrite.
+            if len(current) > _MAX_REWRITE_CHARS:
+                err = (f"file is {len(current)} chars — too large for a safe full rewrite; "
+                       f"skipped to avoid data loss (edit it in chat with edit_file instead)")
+                results.append({"file": file_path, "ok": False, "error": err})
+                task.emit(step=i + 1, total=len(files), file=file_path, status="error", error=err)
+                continue
+
             prompt = (
                 f"You are implementing this coding task:\n\n"
                 f"**Task:** {job}\n\n"
                 f"**Context:**\n{ctx_str}\n\n"
                 f"**Current content of `{file_path}`:**\n"
-                f"```\n{current[:8000]}\n```\n\n"
+                f"```\n{current}\n```\n\n"
                 f"Write the COMPLETE new version of `{file_path}`. "
                 f"Return ONLY the file content — no markdown fences, no explanation."
             )
 
             task.emit(step=i + 1, total=len(files), file=file_path, status="generating")
 
-            new_content = ""
+            new_content   = ""
+            finish_reason = None
             try:
                 stream = client.chat.completions.create(
                     model=model_cfg["api_id"],
                     messages=[{"role": "user", "content": prompt}],
                     stream=True,
-                    max_tokens=4096,
+                    max_tokens=8192,
                 )
                 for chunk in stream:
-                    delta = chunk.choices[0].delta.content or ""
+                    if not chunk.choices:
+                        continue
+                    choice        = chunk.choices[0]
+                    finish_reason = choice.finish_reason or finish_reason
+                    delta = (choice.delta.content or "") if choice.delta else ""
                     if delta:
                         new_content += delta
             except Exception as e:
                 task.emit(step=i + 1, total=len(files), file=file_path, status="error", error=str(e))
                 continue
+
+            # Guard: a length-cut generation is an incomplete file — never write it.
+            if finish_reason == "length":
+                err = "model output hit the token limit — file NOT written (would be truncated)"
+                results.append({"file": file_path, "ok": False, "error": err})
+                task.emit(step=i + 1, total=len(files), file=file_path, status="error", error=err)
+                continue
+
+            new_content = _strip_md_fences(new_content)
 
             # Write the file
             task.emit(step=i + 1, total=len(files), file=file_path, status="writing")
@@ -2211,6 +2280,9 @@ class Handler(BaseHTTPRequestHandler):
 
         ok_count  = sum(1 for r in results if r.get("ok"))
         summary   = f"Agent complete: {ok_count}/{len(files)} files written successfully."
+        failed    = [r for r in results if not r.get("ok")]
+        if failed:
+            summary += "\n" + "\n".join(f"✕ {r['file']}: {r.get('error', 'failed')}" for r in failed)
         task.finish(result=summary)
 
     # ── Brain distillation ────────────────────────────────────────────────────

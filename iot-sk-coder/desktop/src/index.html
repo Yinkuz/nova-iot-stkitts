@@ -377,6 +377,17 @@
         <strong>✓ ChatGPT Plus connected</strong><br>
         <span id="mp-chatgpt-info" style="color:#15803d;font-size:12px">Loading…</span>
       </div>
+      <div class="mp-routing" id="mp-routing">
+        <div class="mp-routing-title">⚡ Smart routing</div>
+        <label class="mp-routing-opt">
+          <input type="radio" name="mp-routing-mode" value="auto">
+          <span><strong>Auto</strong> — NOVA picks the best model per task (vision, coding, reasoning, quick replies)</span>
+        </label>
+        <label class="mp-routing-opt">
+          <input type="radio" name="mp-routing-mode" value="manual">
+          <span><strong>Manual</strong> — always use exactly the model selected above</span>
+        </label>
+      </div>
       <div class="step-error" id="mp-error"></div>
       <button id="mp-save-btn" class="btn-primary btn-wide" style="margin-top:12px">Save &amp; Switch</button>
     </div>

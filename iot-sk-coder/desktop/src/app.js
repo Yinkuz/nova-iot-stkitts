@@ -87,90 +87,214 @@ const COMMANDS = [
   { cmd: '/status',    icon: '📊', desc: 'Show auth, model, and brain stats' },
 ];
 
-// Context-window sizes (K tokens) by api_id  — used by token meter
-const CTX_WINDOWS = {
-  'gpt-4.1':                                 1_000,
-  'gpt-4.1-mini':                            1_000,
-  'o4-mini':                                   200,
-  'gpt-4o':                                    128,
-  'gpt-4o-mini':                               128,
-  'o1':                                        200,
-  'o3-mini':                                   200,
-  'gpt-4-turbo':                               128,
-  'anthropic/claude-sonnet-4-5':               200,
-  'anthropic/claude-3-5-haiku':                200,
-  'anthropic/claude-opus-4-5':                 200,
-  'google/gemini-2.0-flash-001':             1_000,
-  'google/gemma-3-27b-it':                    131,
-  'google/gemini-pro-1.5':                   2_000,
-  'meta-llama/llama-3.3-70b-instruct':         128,
-  'deepseek/deepseek-chat':                     64,
-  'deepseek/deepseek-v4-flash':                128,
-  'deepseek/deepseek-v4-pro':                 128,
-  'mistralai/mistral-large-latest':            128,
-  'qwen/qwen-2.5-coder-32b-instruct':           32,
-  'x-ai/grok-4.1-fast':                         131,
-  'baidu/cobuddy:free':                           32,
-  'qwen/qwen3-coder-flash':                      128,
-  'google/gemini-3.1-flash-lite':              1_000,
-  'openai/gpt-oss-120b':                         128,
-  'deepseek/deepseek-v4-pro':                    128,
-  'deepseek/deepseek-v4-flash':                  128,
+// ══════════════════════════════════════════════════════════════════════════════
+// MODEL INTELLIGENCE — capability registry · task classifier · scoring router
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Single source of truth for what every model can do. Fields per api_id:
+//   ctx       – context window in K tokens
+//   vision    – accepts image input
+//   tools     – supports OpenAI-style function calling (agentic work)
+//   reasoning – 0-3 depth of deliberate reasoning (3 = dedicated reasoner)
+//   coding    – 0-5 code generation strength
+//   speed     – 0-5 latency/throughput (5 = fastest/cheapest)
+//   tier      – 'flagship' | 'fast'  (routing preference class)
+const MODEL_CAPS = {
+  // OpenAI / ChatGPT Plus
+  'gpt-4.1':       { ctx: 1000, vision: true,  tools: true,  reasoning: 2, coding: 5, speed: 3, tier: 'flagship' },
+  'gpt-4.1-mini':  { ctx: 1000, vision: true,  tools: true,  reasoning: 1, coding: 4, speed: 5, tier: 'fast'     },
+  'gpt-4o':        { ctx: 128,  vision: true,  tools: true,  reasoning: 2, coding: 4, speed: 4, tier: 'flagship' },
+  'gpt-4o-mini':   { ctx: 128,  vision: true,  tools: true,  reasoning: 1, coding: 3, speed: 5, tier: 'fast'     },
+  'o1':            { ctx: 200,  vision: false, tools: false, reasoning: 3, coding: 4, speed: 1, tier: 'flagship' },
+  'o3-mini':       { ctx: 200,  vision: false, tools: false, reasoning: 3, coding: 4, speed: 3, tier: 'flagship' },
+  'o4-mini':       { ctx: 200,  vision: true,  tools: true,  reasoning: 3, coding: 4, speed: 3, tier: 'flagship' },
+  'gpt-4-turbo':   { ctx: 128,  vision: true,  tools: true,  reasoning: 2, coding: 4, speed: 2, tier: 'flagship' },
+  // OpenRouter — Anthropic
+  'anthropic/claude-sonnet-4-5': { ctx: 200, vision: true, tools: true, reasoning: 3, coding: 5, speed: 3, tier: 'flagship' },
+  'anthropic/claude-3-5-haiku':  { ctx: 200, vision: true, tools: true, reasoning: 1, coding: 3, speed: 5, tier: 'fast'     },
+  'anthropic/claude-opus-4-5':   { ctx: 200, vision: true, tools: true, reasoning: 3, coding: 5, speed: 2, tier: 'flagship' },
+  // OpenRouter — Google
+  'google/gemini-2.0-flash-001':  { ctx: 1000, vision: true, tools: true,  reasoning: 1, coding: 3, speed: 5, tier: 'fast'     },
+  'google/gemma-3-27b-it':        { ctx: 131,  vision: true, tools: false, reasoning: 1, coding: 2, speed: 4, tier: 'fast'     },
+  'google/gemini-pro-1.5':        { ctx: 2000, vision: true, tools: true,  reasoning: 2, coding: 3, speed: 3, tier: 'flagship' },
+  'google/gemini-3.1-flash-lite': { ctx: 1000, vision: true, tools: true,  reasoning: 1, coding: 3, speed: 5, tier: 'fast'     },
+  // OpenRouter — Meta / DeepSeek / Mistral / Qwen / xAI / other
+  'meta-llama/llama-3.3-70b-instruct': { ctx: 128, vision: false, tools: true,  reasoning: 1, coding: 3, speed: 3, tier: 'flagship' },
+  'deepseek/deepseek-chat':            { ctx: 64,  vision: false, tools: true,  reasoning: 2, coding: 4, speed: 3, tier: 'flagship' },
+  'deepseek/deepseek-v4-pro':          { ctx: 128, vision: false, tools: true,  reasoning: 2, coding: 4, speed: 2, tier: 'flagship' },
+  'deepseek/deepseek-v4-flash':        { ctx: 128, vision: false, tools: true,  reasoning: 1, coding: 3, speed: 5, tier: 'fast'     },
+  'mistralai/mistral-large-latest':    { ctx: 128, vision: false, tools: true,  reasoning: 2, coding: 4, speed: 3, tier: 'flagship' },
+  'qwen/qwen-2.5-coder-32b-instruct':  { ctx: 32,  vision: false, tools: true,  reasoning: 1, coding: 4, speed: 4, tier: 'fast'     },
+  'x-ai/grok-4.1-fast':                { ctx: 131, vision: false, tools: true,  reasoning: 2, coding: 4, speed: 5, tier: 'fast'     },
+  'baidu/cobuddy:free':                { ctx: 32,  vision: false, tools: false, reasoning: 0, coding: 2, speed: 4, tier: 'fast'     },
+  'qwen/qwen3-coder-flash':            { ctx: 128, vision: false, tools: true,  reasoning: 1, coding: 4, speed: 5, tier: 'fast'     },
+  'openai/gpt-oss-120b':               { ctx: 128, vision: false, tools: true,  reasoning: 2, coding: 4, speed: 3, tier: 'flagship' },
+  // Ollama (local)
+  'llama3.3':          { ctx: 128, vision: false, tools: true,  reasoning: 1, coding: 3, speed: 2, tier: 'flagship' },
+  'codestral':         { ctx: 32,  vision: false, tools: false, reasoning: 1, coding: 4, speed: 3, tier: 'flagship' },
+  'deepseek-coder-v2': { ctx: 64,  vision: false, tools: false, reasoning: 1, coding: 4, speed: 3, tier: 'flagship' },
+  'qwen2.5-coder:32b': { ctx: 32,  vision: false, tools: true,  reasoning: 1, coding: 4, speed: 2, tier: 'flagship' },
+  'phi4':              { ctx: 16,  vision: false, tools: false, reasoning: 1, coding: 3, speed: 4, tier: 'fast'     },
+  'mistral':           { ctx: 32,  vision: false, tools: true,  reasoning: 0, coding: 2, speed: 5, tier: 'fast'     },
 };
 
-// ── Vision model routing ──────────────────────────────────────────────────────
-// Models that natively support image/vision input
-const VISION_MODELS = new Set([
-  'google/gemma-3-27b-it',
-  'google/gemini-2.0-flash-001',
-  'google/gemini-3.1-flash-lite',
-  'anthropic/claude-sonnet-4-5',
-  'anthropic/claude-3-5-haiku',
-  'anthropic/claude-opus-4-5',
-  'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'o4-mini',
-]);
-// OpenRouter model to fall back to when the active model can't process images
+const DEFAULT_CAPS = { ctx: 128, vision: false, tools: true, reasoning: 1, coding: 3, speed: 3, tier: 'flagship' };
+
+/**
+ * Capabilities for any model — registry lookup with name-based inference for
+ * unknown/custom IDs, so the app works sensibly with models it has never seen.
+ */
+function capsFor(apiId) {
+  if (!apiId) return { ...DEFAULT_CAPS };
+  if (MODEL_CAPS[apiId]) return MODEL_CAPS[apiId];
+  const id   = apiId.toLowerCase();
+  const caps = { ...DEFAULT_CAPS };
+  if (/(gpt-4o|gpt-4\.1|gpt-5|claude|gemini|gemma-3|pixtral|llava|vision|qwen[\w.-]*-?vl|minicpm-v|phi-4-multimodal)/.test(id)) caps.vision = true;
+  if (/(^|\/)o[134]\b|reason|(^|[\/-])r1\b|thinking/.test(id)) caps.reasoning = 3;
+  if (/coder|codestral|code(?!x)/.test(id))                    caps.coding = 4;
+  if (/mini|flash|lite|haiku|small|tiny|nano|turbo|fast|[3-9]b\b/.test(id)) { caps.speed = 5; caps.tier = 'fast'; }
+  if (/gemini/.test(id))                                       caps.ctx = 1000;
+  if (/(^|\/)o1\b|(^|\/)o3-mini|deepseek-r1/.test(id))         caps.tools = false;
+  return caps;
+}
+
+// OpenRouter model to fall back to when the active provider has no vision model
 const VISION_FALLBACK = 'google/gemma-3-27b-it';
 
-// ── Smart model routing ───────────────────────────────────────────────────────
-// Maps flagship → fast/cheap alternative for simple messages & background tasks
-const FAST_MODEL_MAP = {
-  // OpenAI
-  'gpt-4o':       'gpt-4o-mini',
-  'o1':           'gpt-4o-mini',
-  'o3-mini':      'gpt-4o-mini',
-  'gpt-4-turbo':  'gpt-4o-mini',
-  // OpenRouter — Anthropic
-  'anthropic/claude-sonnet-4-5': 'anthropic/claude-3-5-haiku',
-  'anthropic/claude-opus-4-5':   'anthropic/claude-3-5-haiku',
-  // OpenRouter — DeepSeek duo
-  'deepseek/deepseek-v4-pro':    'deepseek/deepseek-v4-flash',
-  // OpenRouter — others already fast, keep as-is
+// ── Task classifier ───────────────────────────────────────────────────────────
+// Pure-heuristic (no LLM call) classification of what the user is asking for,
+// producing the capability profile the router scores models against.
+const _RX_CODE      = /```|\.(py|js|ts|jsx|tsx|rs|go|java|cpp|h|json|ya?ml|html|css|sql|sh|bat|toml)\b|@[\w./\\-]+\.\w{1,6}|(function|class |def |const |import |refactor|debug|stack ?trace|traceback|error:|exception|compil|lint|unit test|pytest|npm |pip |git )/i;
+const _RX_BUILD     = /\b(build|create|implement|write|generate|make|add|fix|update|change|remove|migrate|convert|deploy|install|configure|design|render|style|animate|optimi[sz]e|test|run|landing|page|component|api|script|server|app|game|dashboard|signature|document|report|spreadsheet|excel|pdf)\b/i;
+const _RX_REASONING = /(why|root cause|architect|trade-?offs?|design decision|prove|derive|complexit|algorithm|optimal|strateg|plan (out|the)|think (deeply|through)|race condition|deadlock|memory leak|performance (issue|problem)|security (audit|review)|step[- ]by[- ]step analysis)/i;
+const _RX_RESEARCH  = /(search|look up|latest|current version|news|docs? for|documentation|release notes|changelog|compare .+ (vs|versus|with)|research|find out|what'?s new|https?:\/\/)/i;
+
+/**
+ * @returns {{type: string, needs: {vision, tools, reasoning, longContext, coding}}}
+ *   type ∈ chat | coding | reasoning | research | vision | general
+ */
+function classifyTask(text = '', attachments = []) {
+  const t = text.toLowerCase();
+  const needs = {
+    vision:      attachments.some(a => a.type === 'image'),
+    coding:      _RX_CODE.test(text),
+    reasoning:   _RX_REASONING.test(t),
+    tools:       false,
+    longContext: false,
+  };
+  const wantsAction   = _RX_BUILD.test(t) || needs.coding;
+  const wantsResearch = _RX_RESEARCH.test(t);
+  needs.tools = wantsAction || wantsResearch;
+
+  const attachChars = attachments.reduce((n, a) => n + (a.size || 0), 0);
+  needs.longContext = (estimateTokens(state.messages) + Math.round((text.length + attachChars) / 4)) > 48_000;
+
+  let type = 'general';
+  if      (needs.vision)                       type = 'vision';
+  else if (needs.reasoning && !wantsAction)    type = 'reasoning';
+  else if (needs.coding || wantsAction)        type = 'coding';
+  else if (wantsResearch)                      type = 'research';
+  else if (text.length < 150)                  type = 'chat';
+  return { type, needs };
+}
+
+// ── Scoring router ────────────────────────────────────────────────────────────
+// Scores each candidate model in the user's provider for the classified task.
+function scoreModel(apiId, task) {
+  const caps = capsFor(apiId);
+  if (task.needs.vision && !caps.vision) return -Infinity;   // hard requirement
+  let s = 0;
+  switch (task.type) {
+    case 'chat':      s = caps.speed * 3 + caps.coding;                          break;
+    case 'coding':    s = caps.coding * 3 + (caps.tools ? 5 : 0) + caps.speed;   break;
+    case 'reasoning': s = caps.reasoning * 4 + caps.coding * 2;                  break;
+    case 'research':  s = (caps.tools ? 6 : 0) + caps.speed * 2 + caps.reasoning;break;
+    case 'vision':    s = caps.coding * 2 + caps.reasoning + caps.speed;         break;
+    default:          s = caps.coding * 2 + caps.reasoning * 2 + caps.speed;     break;
+  }
+  if (task.needs.tools && !caps.tools)  s -= 8;   // agentic task on a tool-less model is crippling
+  if (task.needs.longContext)           s += Math.min(caps.ctx / 100, 10);
+  return s;
+}
+
+/** Fastest capable sibling in the user's provider catalogue (bg tasks, meta-calls). */
+function fastSiblingFor(cfg) {
+  if (!cfg) return null;
+  const pool = (MODELS[cfg.provider] || []).filter(m => capsFor(m.api_id).tier === 'fast');
+  pool.sort((a, b) => {
+    const ca = capsFor(a.api_id), cb = capsFor(b.api_id);
+    return (cb.speed * 2 + cb.coding) - (ca.speed * 2 + ca.coding);
+  });
+  return pool[0]?.api_id || cfg.api_id;
+}
+
+const _ROUTE_REASONS = {
+  chat:      'quick reply → fast model',
+  coding:    'coding task → strongest coder',
+  reasoning: 'deep-reasoning task → reasoner model',
+  research:  'research task → tool-capable fast model',
+  vision:    'image attached → vision model',
+  general:   'general task',
 };
 
 /**
- * Given user message text, return the modelCfg to use.
- * @param {string} text  The user's message (for complexity heuristics)
+ * Given the user's message, return the modelCfg to use for this turn.
+ * @param {string} text          The user's message
  * @param {'auto'|'fast'|'flagship'} mode
+ * @param {Array}  attachments   Current attachments (for vision/long-context needs)
  */
-function routeModel(text = '', mode = 'auto') {
+function routeModel(text = '', mode = 'auto', attachments = []) {
   if (!state.modelCfg) return null;
-  const cfg     = state.modelCfg;
-  const fastId  = FAST_MODEL_MAP[cfg.api_id];
+  const cfg = state.modelCfg;
 
-  if (mode === 'flagship' || !fastId) return cfg;
-  if (mode === 'fast') return { ...cfg, api_id: fastId, display: cfg.display + ' ⚡' };
+  // Manual lock or explicit flagship request — always exactly what the user picked
+  if (mode === 'flagship' || (mode === 'auto' && state.routing.mode === 'manual')) {
+    return { ...cfg, routeReason: '' };
+  }
 
-  // Auto: flash for short conversational turns, pro for anything involving code/files/generation
-  const isHeavy = (
-    text.length > 150 ||
-    /```/.test(text) ||
-    /(rewrite|implement|refactor|generate|create|build|fix|debug|write|design|test|deploy|install|configure|make|add|update|change|remove|migrate|convert|parse|render|style|animate|optimise|optimize|analyse|analyze|review|explain how|landing|page|component|function|class|api|script|skill|@\w)/i.test(text)
-  );
+  if (mode === 'fast') {
+    const fastId = fastSiblingFor(cfg);
+    return fastId === cfg.api_id
+      ? { ...cfg, routeReason: '' }
+      : { ...cfg, api_id: fastId, display: fastId.split('/').pop() + ' ⚡', routeReason: 'background task → fast model' };
+  }
 
-  return isHeavy
-    ? cfg
-    : { ...cfg, api_id: fastId, display: fastId.split('/').pop() };
+  // Auto: score every model in the provider catalogue (plus the user's pick,
+  // which may be a custom ID not in the catalogue).
+  const task = classifyTask(text, attachments);
+  const seen = new Set();
+  const pool = [cfg.api_id, ...(MODELS[cfg.provider] || []).map(m => m.api_id)]
+    .filter(id => !seen.has(id) && seen.add(id));
+
+  const scored = pool
+    .map(id => ({ id, score: scoreModel(id, task) }))
+    .filter(c => c.score !== -Infinity)
+    .sort((a, b) => b.score - a.score);
+
+  // No candidate can see the attached images → cross-catalogue vision fallback
+  if (!scored.length) {
+    if (cfg.provider === 'openrouter') {
+      return { ...cfg, api_id: VISION_FALLBACK, display: 'Gemma 3 🖼️ vision', routeReason: _ROUTE_REASONS.vision };
+    }
+    return { ...cfg, routeReason: '' };   // keep user's model; image binary is stripped downstream
+  }
+
+  const best    = scored[0];
+  const current = scored.find(c => c.id === cfg.api_id);
+
+  // Stickiness: keep the user's model unless the winner beats it meaningfully.
+  // Predictability matters more than a marginal score edge.
+  if (current && best.score - current.score < 4) {
+    return { ...cfg, routeReason: '' };
+  }
+
+  const bestMeta = (MODELS[cfg.provider] || []).find(m => m.api_id === best.id);
+  return {
+    ...cfg,
+    api_id:      best.id,
+    display:     bestMeta ? bestMeta.name.split('—')[0].trim() : best.id.split('/').pop(),
+    routeReason: _ROUTE_REASONS[task.type] || '',
+  };
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -209,9 +333,11 @@ async function orchCheckDrift(task, response) {
   if (!state.modelCfg || !task || response.length < 80) return;
   if (state.modelCfg.provider !== 'openrouter') return;   // OpenAI/Ollama skip — models reliable enough
 
+  // Use the fastest model in the user's own provider catalogue — never a
+  // hardcoded ID that may not exist on their provider/account.
   const checker = {
     ...state.modelCfg,
-    api_id:  'deepseek/deepseek-v4-flash',
+    api_id:  fastSiblingFor(state.modelCfg),
     display: 'orchestrator',
   };
 
@@ -229,6 +355,7 @@ async function orchCheckDrift(task, response) {
       ()        => {},
       undefined,
       ()        => {},
+      { useTools: false },   // supervisor answers YES/NO — must never run tools
     );
     if (answer.trim().toUpperCase().startsWith('NO')) {
       state.orchestrator.driftWarnings++;
@@ -242,7 +369,7 @@ function showDriftWarning(task) {
   const w = document.getElementById('orch-drift-warning');
   if (!w) return;
   const preview = task.length > 90 ? task.slice(0, 90) + '…' : task;
-  w.innerHTML = `🎯 <strong>Orchestrator:</strong> NOVA may have drifted from your task — <em>"${preview}"</em>`;
+  w.innerHTML = `🎯 <strong>Orchestrator:</strong> NOVA may have drifted from your task — <em>"${escapeHtml(preview)}"</em>`;
   w.classList.remove('hidden');
   setTimeout(() => w.classList.add('hidden'), 14_000);
 }
@@ -278,6 +405,7 @@ const state = {
   gitCtx:       null,        // {branch, status, diff_stat, log} or null
   paths:        { novaRoot: '', openDesign: '', desktopDir: '', homeDir: '' },
   orchestrator: { activeTask: null, driftWarnings: 0 },
+  routing:      { mode: localStorage.getItem('nova_routing') || 'auto' },   // 'auto' | 'manual'
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -608,16 +736,17 @@ function renderAttachmentChips() {
     const chip = document.createElement('div');
     chip.className = `att-chip att-${att.type}`;
 
+    const safeName = escapeHtml(att.name);
     if (att.type === 'image') {
       const sizeLabel = att.isLarge
         ? `${_fmtSize(att.size)} · ${att.width}×${att.height} <span class="att-large-tag">thumb</span>`
         : _fmtSize(att.size);
-      chip.innerHTML = `<img src="${att.preview}" class="att-thumb" alt="${att.name}"/><span class="att-name" title="${att.name}">${att.name}</span><span class="att-size">${sizeLabel}</span><button class="att-remove" title="Remove">✕</button>`;
+      chip.innerHTML = `<img src="${att.preview}" class="att-thumb" alt="${safeName}"/><span class="att-name" title="${safeName}">${safeName}</span><span class="att-size">${sizeLabel}</span><button class="att-remove" title="Remove">✕</button>`;
     } else if (att.type === 'folder') {
-      chip.innerHTML = `<span class="att-icon">📁</span><span class="att-name" title="${att.name}">${att.name}</span><span class="att-size">${att.files?.length || 0} files</span><button class="att-remove" title="Remove">✕</button>`;
+      chip.innerHTML = `<span class="att-icon">📁</span><span class="att-name" title="${safeName}">${safeName}</span><span class="att-size">${att.files?.length || 0} files</span><button class="att-remove" title="Remove">✕</button>`;
     } else {
       const icon = att.type === 'code' ? '📄' : '📎';
-      chip.innerHTML = `<span class="att-icon">${icon}</span><span class="att-name" title="${att.name}">${att.name}</span><span class="att-size">${_fmtSize(att.size)}</span><button class="att-remove" title="Remove">✕</button>`;
+      chip.innerHTML = `<span class="att-icon">${icon}</span><span class="att-name" title="${safeName}">${safeName}</span><span class="att-size">${_fmtSize(att.size)}</span><button class="att-remove" title="Remove">✕</button>`;
     }
 
     chip.querySelector('.att-remove').addEventListener('click', () => {
@@ -673,7 +802,7 @@ function buildMultimodalContent(text, attachments, modelApiId = null) {
   // causes the model to echo the raw bytes back as text, blowing out the context
   // window. The origPath in the attachment text-context is enough — the model
   // uses run_command to encode the file itself when needed.
-  const isVision = modelApiId ? VISION_MODELS.has(modelApiId) : true;
+  const isVision = modelApiId ? capsFor(modelApiId).vision : true;
   const images   = isVision ? attachments.filter(a => a.type === 'image' && a.content) : [];
 
   if (!images.length) return text;   // plain string is fine for text-only
@@ -736,7 +865,7 @@ async function api(path, body = null) {
   return r.json();
 }
 
-async function streamChat(messages, modelCfg, onChunk, onDone, onError, signal, onToolEvent) {
+async function streamChat(messages, modelCfg, onChunk, onDone, onError, signal, onToolEvent, opts = {}) {
   let fullText = '';
   try {
     const resp = await fetch(BRIDGE + '/chat', {
@@ -746,10 +875,18 @@ async function streamChat(messages, modelCfg, onChunk, onDone, onError, signal, 
         messages,
         model_cfg: modelCfg,
         workspace: state.workspace || undefined,
-        use_tools: true,
+        use_tools: opts.useTools !== false,
+        // Registry-driven hint so the bridge doesn't guess tool support by provider
+        supports_tools: capsFor(modelCfg?.api_id).tools,
       }),
       signal,  // AbortController signal — undefined = no cancellation
     });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '');
+      onError(`Bridge error ${resp.status}${detail ? ': ' + detail.slice(0, 200) : ''}`);
+      return;
+    }
+    if (!resp.body) { onError('No response stream from bridge.'); return; }
     const reader  = resp.body.getReader();
     const decoder = new TextDecoder();
     let   buf     = '';
@@ -762,7 +899,9 @@ async function streamChat(messages, modelCfg, onChunk, onDone, onError, signal, 
       buf = parts.pop();
       for (const part of parts) {
         if (!part.startsWith('data: ')) continue;
-        const json = JSON.parse(part.slice(6));
+        let json;
+        try { json = JSON.parse(part.slice(6)); }
+        catch { continue; }   // one malformed event must not kill the stream
         if (json.error)            { onError(json.error); return; }
         if (json.done)             { onDone(fullText);     return; }
         if (json.text)             { fullText += json.text; onChunk(json.text, fullText); }
@@ -950,6 +1089,17 @@ function escapeHtml(s) {
   return String(s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Remove a wrapping markdown code fence from model output that should be raw file content
+function stripCodeFences(text) {
+  let t = (text || '').trim();
+  if (!t.startsWith('```')) return text;
+  const firstNl = t.indexOf('\n');
+  if (firstNl === -1) return text;
+  t = t.slice(firstNl + 1);
+  if (t.trimEnd().endsWith('```')) t = t.trimEnd().slice(0, -3);
+  return t;
 }
 
 // Try to detect a file path from the first comment line of a code block
@@ -1185,9 +1335,11 @@ function diffLines(oldText, newText) {
 }
 
 let _diffConfirmCb = null;
+let _diffCancelCb  = null;
 
-function showDiffOverlay(filePath, oldContent, newContent, onConfirm) {
+function showDiffOverlay(filePath, oldContent, newContent, onConfirm, onCancel = null) {
   _diffConfirmCb = onConfirm;
+  _diffCancelCb  = onCancel;
 
   const hunks   = diffLines(oldContent, newContent);
   const overlay = document.getElementById('diff-overlay');
@@ -1214,20 +1366,23 @@ function showDiffOverlay(filePath, oldContent, newContent, onConfirm) {
     `📝 Review Changes  (+${adds} / -${dels} lines)`;
 }
 
-function hideDiffOverlay() {
+function hideDiffOverlay(cancelled = true) {
   document.getElementById('diff-overlay').classList.add('hidden');
+  const cancelCb = cancelled ? _diffCancelCb : null;
   _diffConfirmCb = null;
+  _diffCancelCb  = null;
+  if (cancelCb) cancelCb();   // let waiting flows (agent loop) resume on cancel
 }
 
 // Wire up diff overlay buttons (called once at boot)
 function initDiffOverlay() {
   document.getElementById('diff-confirm-btn').addEventListener('click', async () => {
     const cb = _diffConfirmCb;
-    hideDiffOverlay();
+    hideDiffOverlay(false);
     if (cb) await cb();
   });
-  document.getElementById('diff-cancel-btn').addEventListener('click', hideDiffOverlay);
-  document.getElementById('diff-close-x').addEventListener('click',    hideDiffOverlay);
+  document.getElementById('diff-cancel-btn').addEventListener('click', () => hideDiffOverlay());
+  document.getElementById('diff-close-x').addEventListener('click',    () => hideDiffOverlay());
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1348,7 +1503,7 @@ async function initTerminal() {
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter')     { sendFn(); return; }
-    if (e.key === 'ArrowUp')   { e.preventDefault(); input.value = termHistory[++termHistIdx] || ''; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); termHistIdx = Math.min(termHistory.length - 1, termHistIdx + 1); input.value = termHistory[termHistIdx] || ''; }
     if (e.key === 'ArrowDown') { e.preventDefault(); termHistIdx = Math.max(-1, termHistIdx - 1); input.value = termHistory[termHistIdx] || ''; }
   });
   document.getElementById('term-send-btn').addEventListener('click', sendFn);
@@ -1586,19 +1741,25 @@ async function executeAgentBrief(brief) {
       );
     });
 
+    // Models often wrap the file in a markdown fence despite instructions
+    newContent = stripCodeFences(newContent);
+
     updateLastMessage(agentCard, `New version of \`${filePath}\` ready — review diff below.`, true);
 
-    // Show diff and wait for user to confirm before continuing
+    // Show diff and wait for the user to confirm OR cancel before continuing
     await new Promise((resolve) => {
-      showDiffOverlay(filePath, currentContent, newContent, async () => {
-        const r = await window.electronAPI?.writeFile(filePath, newContent);
-        addMessage('system-note', r?.ok ? `✓ Written: ${filePath}` : `✕ Failed: ${r?.error}`);
-        resolve();
-      });
-      // Also resolve if user cancels
-      const origHide = hideDiffOverlay;
-      document.getElementById('diff-cancel-btn')._agentResolve = resolve;
-      document.getElementById('diff-close-x')._agentResolve    = resolve;
+      showDiffOverlay(
+        filePath, currentContent, newContent,
+        async () => {
+          const r = await window.electronAPI?.writeFile(filePath, newContent);
+          addMessage('system-note', r?.ok ? `✓ Written: ${filePath}` : `✕ Failed: ${r?.error}`);
+          resolve();
+        },
+        () => {
+          addMessage('system-note', `⏭ Skipped: ${filePath} (change rejected)`);
+          resolve();
+        },
+      );
     });
   }
 
@@ -1629,14 +1790,15 @@ function addMessage(role, content, opts = {}) {
         for (const img of imgs) {
           const dimLabel = img.isLarge && img.width
             ? ` · ${img.width}×${img.height} (thumbnail)` : '';
-          attHtml += `<img src="${img.preview}" class="msg-att-img" alt="${img.name}" title="${img.name}${dimLabel}" onclick="this.requestFullscreen?.()"/>`;
+          const safeImgName = escapeHtml(img.name);
+          attHtml += `<img src="${img.preview}" class="msg-att-img" alt="${safeImgName}" title="${safeImgName}${dimLabel}" onclick="this.requestFullscreen?.()"/>`;
           if (img.isLarge) {
             attHtml += `<div class="msg-att-large-tag">⬆ ${_fmtSize(img.size)} original · thumbnail shown to AI</div>`;
           }
         }
         for (const f of files) {
           const icon = f.type === 'folder' ? '📁' : '📄';
-          const label = f.type === 'folder' ? `${f.name} (${f.files?.length || 0} files)` : `${f.name} · ${_fmtSize(f.size)}`;
+          const label = f.type === 'folder' ? `${escapeHtml(f.name)} (${f.files?.length || 0} files)` : `${escapeHtml(f.name)} · ${_fmtSize(f.size)}`;
           attHtml += `<div class="msg-att-file">${icon} ${label}</div>`;
         }
         attHtml += '</div>';
@@ -1694,6 +1856,12 @@ async function sendMessage(text) {
   const trimmed = text.trim();
   if (trimmed.startsWith('/') && !state.attachments.length) { handleCommand(trimmed); return; }
 
+  // No model configured yet — routeModel would return null and crash below
+  if (!state.modelCfg) {
+    addMessage('system-note', 'No AI model configured yet — type /model to pick a provider and model.');
+    return;
+  }
+
   // Snapshot attachments, then clear them
   const attachments = [...state.attachments];
   state.attachments = [];
@@ -1704,13 +1872,8 @@ async function sendMessage(text) {
 
   // Resolve the model NOW — before building content — so we know whether to
   // include image binary data (vision models) or strip it (text-only models).
-  let chosenModel = routeModel(trimmed, 'auto');
-  const hasImages = attachments.some(a => a.type === 'image' || a.type === 'large-image');
-  if (hasImages && !VISION_MODELS.has(chosenModel.api_id)) {
-    if (state.modelCfg?.provider === 'openrouter') {
-      chosenModel = { ...state.modelCfg, api_id: VISION_FALLBACK, display: 'Gemma 3 🖼️ vision' };
-    }
-  }
+  // The router handles vision needs, task type, and manual-lock mode itself.
+  const chosenModel = routeModel(trimmed, 'auto', attachments);
 
   // Build display content and message content
   const displayText  = trimmed || '(see attached files)';
@@ -1741,7 +1904,7 @@ async function sendMessage(text) {
   const novaCard = addMessage('nova', '', { cursor: true });
 
   try {
-    const sysPrompt   = buildSystemPrompt();
+    const sysPrompt   = buildSystemPrompt(chosenModel);   // capabilities of the model actually serving
 
     // Optionally inject RAG context for the current query
     const ragContext  = await fetchRagContext(trimmed);
@@ -1999,8 +2162,9 @@ function showRoutedBadge(chosenModel) {
   if (!badge) return;
   const isRouted = chosenModel?.api_id !== state.modelCfg?.api_id;
   if (isRouted) {
-    const isVision = chosenModel.api_id === VISION_FALLBACK;
-    badge.textContent = isVision ? `🖼️ Auto-switched → Gemma 3 (vision)` : `⚡ ${chosenModel.display}`;
+    const reason = chosenModel.routeReason ? ` · ${chosenModel.routeReason}` : '';
+    badge.textContent = `⚡ ${chosenModel.display}${reason}`;
+    badge.title = `Smart routing picked ${chosenModel.api_id} for this message. Switch to Manual in /model to disable.`;
     badge.classList.remove('hidden');
     setTimeout(() => badge.classList.add('hidden'), 6000);
   } else {
@@ -2216,7 +2380,8 @@ async function regenerateResponse(card) {
       attachRetryButton(card);
       finishResponse();
     },
-    _abortCtrl.signal
+    _abortCtrl.signal,
+    (toolEvt) => renderToolEvent(card, toolEvt)
   );
 }
 
@@ -2322,7 +2487,7 @@ function initPreview() {
   });
 }
 
-function buildSystemPrompt() {
+function buildSystemPrompt(activeModel = null) {
   const bd = state.brainData;
   let sys = `You are NOVA — the IOT St. Kitts internal AI coding assistant.
 You are an expert software engineer specialising in Python, IoT, MQTT, REST APIs, and embedded systems.
@@ -2338,9 +2503,9 @@ You work exclusively with the IOT St. Kitts engineering team. Be concise, direct
 Every assignment that produces files MUST get its own clearly-named folder **before** any files are written. Never drop loose files directly on the Desktop or in a generic location.
 
 **Rules:**
-- **First action for any new task** = create the project folder with `run_command mkdir -p <path>` then write all files inside it.
-- **Folder naming:** use a short, descriptive slug matching the task — e.g. `email-signature-johnson`, `expense-tracker`, `api-project`, `landing-page-pulseflow`. Use hyphens, lowercase, no spaces.
-- **Default location:** `C:\Users\IOT\Desktop\<folder-name>\` unless the user specifies otherwise or a workspace folder is already set.
+- **First action for any new task** = create the project folder with \`run_command mkdir -p <path>\` then write all files inside it.
+- **Folder naming:** use a short, descriptive slug matching the task — e.g. \`email-signature-johnson\`, \`expense-tracker\`, \`api-project\`, \`landing-page-pulseflow\`. Use hyphens, lowercase, no spaces.
+- **Default location:** \`C:\\Users\\IOT\\Desktop\\<folder-name>\\\` unless the user specifies otherwise or a workspace folder is already set.
 - **Follow-up tasks** on an existing assignment go into the same folder — check the "Last touched:" footer to find it.
 - **Exception:** if the user explicitly says "save to Desktop" or gives a full path, use exactly that path.
 
@@ -2549,6 +2714,23 @@ def execute(args: dict, workspace: str) -> str:
 
 \n`;
 
+  // Model self-awareness — NOVA adapts its behaviour to the model it runs on
+  const mcfg = activeModel || state.modelCfg;
+  if (mcfg) {
+    const caps = capsFor(mcfg.api_id);
+    sys += `## Active model — adapt to your own capabilities\n`;
+    sys += `You are currently running as **${mcfg.display || mcfg.api_id}** (\`${mcfg.api_id}\` via ${mcfg.provider}).\n`;
+    sys += `- Context window: ~${caps.ctx}K tokens\n`;
+    sys += caps.vision
+      ? `- Vision: YES — you can see attached images directly.\n`
+      : `- Vision: NO — you cannot see image content. Work from the attachment metadata and file path instead, and never claim to have seen an image.\n`;
+    sys += caps.tools
+      ? `- Tool calling: YES — use the tools listed below for all file, shell, git, browser, and research work.\n`
+      : `- Tool calling: NO — tools are unavailable on this model. Provide complete code and exact instructions instead, and suggest switching models (via /model) for agentic tasks.\n`;
+    sys += `- Profile: coding ${caps.coding}/5 · reasoning ${caps.reasoning}/3 · speed ${caps.speed}/5\n`;
+    sys += `NOVA has smart routing: quick messages may be served by a faster sibling model and image messages by a vision model. The user can lock one model via /model → Manual routing.\n\n`;
+  }
+
   // Compressed conversation summary (injected when context was pruned)
   if (state.ctxSummary) {
     sys += `## Earlier conversation (compressed)\n${state.ctxSummary}\n\n`;
@@ -2608,7 +2790,7 @@ let _compressingCtx = false;
 
 function updateContextMeter() {
   const tokens  = estimateTokens(state.messages);
-  const ctxK    = (state.modelCfg ? CTX_WINDOWS[state.modelCfg.api_id] : null) || 128;
+  const ctxK    = capsFor(state.modelCfg?.api_id).ctx || 128;
   const pct     = Math.min(100, (tokens / (ctxK * 1000)) * 100);
 
   const fill  = document.getElementById('ctx-meter-fill');
@@ -2633,7 +2815,6 @@ async function compressContext() {
   // Take the oldest 40% of messages and summarise them
   const cutoff  = Math.max(4, Math.floor(state.messages.length * 0.4));
   const oldMsgs = state.messages.slice(0, cutoff);
-  const keepMsgs = state.messages.slice(cutoff);
 
   // Build a minimal text representation of the old turns to send to the model
   const convoText = oldMsgs.map(m => {
@@ -2658,16 +2839,20 @@ async function compressContext() {
       streamChat(summaryReq, state.modelCfg,
         (_chunk, acc) => { summary = acc; },
         () => resolve(),
-        () => resolve()
+        () => resolve(),
+        undefined,
+        undefined,
+        { useTools: false }   // summariser must never execute tools
       );
     });
   } catch { /* best-effort */ }
 
   if (!summary.trim()) return;
 
-  // Replace the old turns with a compressed summary message
+  // Replace the old turns with a compressed summary message.
+  // Re-slice from the live array — messages added while summarising must survive.
   state.ctxSummary = (state.ctxSummary ? state.ctxSummary + '\n\n' : '') + summary.trim();
-  state.messages   = keepMsgs;
+  state.messages   = state.messages.slice(cutoff);
   updateContextMeter();
   addMessage('system-note', `⟳ Context compressed (${cutoff} turns → summary). Full history still in Brain.`);
 }
@@ -2729,7 +2914,7 @@ function showHelp() {
     `**NOVA Commands**\n\n` +
     `/run        — Package conversation → execute coding agent\n` +
     `/memory     — Show what NOVA remembers across sessions\n` +
-    `/model      — Switch AI model or provider\n` +
+    `/model      — Switch AI model, provider, or smart-routing mode\n` +
     `/workspace  — Set project root folder (git context + file paths)\n` +
     `/git        — Show current git status and recent commits\n` +
     `/preview    — Toggle in-app preview pane  (Ctrl+Shift+P)\n` +
@@ -2922,8 +3107,25 @@ function showModelPanel() {
   updateKeyVisibility(mpProvider, null, 'mp-key-input', null);
   if (mpProvider === 'chatgpt') refreshChatGPTStatus();
 
+  // Reflect the current smart-routing mode
+  document.querySelectorAll('input[name="mp-routing-mode"]').forEach(r => {
+    r.checked = r.value === state.routing.mode;
+  });
+
   openPanel('model-panel');
 }
+
+// Smart-routing mode toggle — persists immediately, no save needed
+document.querySelectorAll('input[name="mp-routing-mode"]').forEach(radio => {
+  radio.addEventListener('change', () => {
+    if (!radio.checked) return;
+    state.routing.mode = radio.value;
+    localStorage.setItem('nova_routing', radio.value);
+    addMessage('system-note', radio.value === 'auto'
+      ? '⚡ Smart routing ON — NOVA picks the best model for each task.'
+      : '🔒 Manual mode — NOVA will always use your selected model.');
+  });
+});
 
 async function refreshChatGPTStatus() {
   const info = document.getElementById('mp-chatgpt-info');
@@ -3013,14 +3215,15 @@ function showBriefPanel(brief) {
   title.textContent = '⚡ Agent Task Brief';
   el.briefBody.appendChild(title);
 
-  row('Task', brief.task || '—');
+  // Brief content is model-generated — escape before injecting as HTML
+  row('Task', escapeHtml(brief.task || '—'));
 
   if (brief.context?.length) {
-    const ul = '<ul>' + brief.context.map(c => `<li>${c}</li>`).join('') + '</ul>';
+    const ul = '<ul>' + brief.context.map(c => `<li>${escapeHtml(c)}</li>`).join('') + '</ul>';
     row('Context', ul);
   }
   if (brief.files?.length) {
-    row('Files', brief.files.map(f => `<code>${f}</code>`).join('<br>'));
+    row('Files', brief.files.map(f => `<code>${escapeHtml(f)}</code>`).join('<br>'));
   }
 
   // Show in chat AND open panel
