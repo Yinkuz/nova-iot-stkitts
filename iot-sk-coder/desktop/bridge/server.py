@@ -1958,12 +1958,19 @@ class Handler(BaseHTTPRequestHandler):
             provider = model_cfg.get("provider", "openai")
             api_id   = model_cfg.get("api_id", "")
 
-            # Tool use: only openai/openrouter; reasoning models (o1/o3) don't support it yet
-            supports_tools = (
-                use_tools
-                and provider in ("openai", "openrouter")
-                and api_id not in ("o1", "o3-mini")
-            )
+            # Tool support: the renderer sends a registry-driven hint per model
+            # (capsFor(api_id).tools). When present it wins — it knows about
+            # tool-capable Ollama/ChatGPT models and tool-less reasoners alike.
+            # Without a hint, fall back to the old provider heuristic.
+            hint = body.get("supports_tools")
+            if hint is not None:
+                supports_tools = bool(use_tools and hint)
+            else:
+                supports_tools = (
+                    use_tools
+                    and provider in ("openai", "openrouter", "chatgpt")
+                    and api_id not in ("o1", "o3-mini")
+                )
 
             current_messages = list(messages)
 

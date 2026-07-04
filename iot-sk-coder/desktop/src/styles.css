@@ -2030,3 +2030,31 @@ body {
 .msg-card:hover .msg-copy-btn { opacity: .55; }
 .msg-copy-btn:hover            { opacity: 1 !important; color: var(--nova); }
 .msg-copy-btn.copied           { color: var(--green, #22c55e); opacity: 1 !important; }
+
+/* ── Smart routing controls (model panel) ─────────────────────────────────── */
+.mp-routing {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #1e2633);
+  border-radius: 8px;
+  background: var(--bg-2, rgba(255,255,255,0.02));
+}
+.mp-routing-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2, #9aa4b2);
+  margin-bottom: 8px;
+  letter-spacing: .3px;
+}
+.mp-routing-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 12px;
+  color: var(--text-2, #9aa4b2);
+  line-height: 1.45;
+  cursor: pointer;
+}
+.mp-routing-opt input { margin-top: 2px; accent-color: var(--nova, #ff3b5c); cursor: pointer; }
+.mp-routing-opt strong { color: var(--text-1, #e6e9ee); }
