@@ -2058,3 +2058,65 @@ body {
 }
 .mp-routing-opt input { margin-top: 2px; accent-color: var(--nova, #ff3b5c); cursor: pointer; }
 .mp-routing-opt strong { color: var(--text-1, #e6e9ee); }
+
+/* ── Jump to latest (smart auto-scroll) ───────────────────────────────────── */
+#chat-column { position: relative; }
+#jump-latest-btn {
+  position: absolute;
+  bottom: 148px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #1e2633);
+  background: var(--bg-2, #10141c);
+  color: var(--text-1, #e6e9ee);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,.45);
+  transition: transform .12s, background .12s;
+}
+#jump-latest-btn:hover  { background: var(--nova, #ff3b5c); color: #fff; transform: translateX(-50%) translateY(-1px); }
+#jump-latest-btn.hidden { display: none; }
+
+/* ── Session delete button ────────────────────────────────────────────────── */
+.sess-del-btn {
+  background: none;
+  border: none;
+  color: var(--text-3, #5b6472);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity .12s, color .12s;
+}
+.session-item:hover .sess-del-btn { opacity: .7; }
+.sess-del-btn:hover               { opacity: 1 !important; color: #ef4444; }
+
+/* ── Brain panel action bar ───────────────────────────────────────────────── */
+.brain-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border, #1e2633);
+  border-radius: 8px;
+  background: var(--bg-2, rgba(255,255,255,0.02));
+}
+.brain-updated        { font-size: 11px; color: var(--text-3, #8a93a2); }
+.brain-actions-spacer { flex: 1; }
+.brain-act-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #1e2633);
+  background: transparent;
+  color: var(--text-2, #9aa4b2);
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.brain-act-btn:hover          { background: var(--nova, #ff3b5c); color: #fff; border-color: var(--nova, #ff3b5c); }
+.brain-act-btn.danger:hover   { background: #ef4444; border-color: #ef4444; }
+.brain-act-btn:disabled       { opacity: .5; cursor: default; }

@@ -13,13 +13,44 @@ At session end the LLM distils new knowledge back into the brain automatically.
 from __future__ import annotations
 
 import json
+import os
+import re
+import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 # ── Storage paths ─────────────────────────────────────────────────────────────
-DATA_DIR     = Path.home() / ".iot-st-kitts-code"
+# Memory must work wherever the app is installed:
+#   1. ISTKC_DATA_DIR env var        — portable / shared-machine installs
+#   2. ~/.iot-st-kitts-code          — default
+#   3. %LOCALAPPDATA%\iot-st-kitts-code — Windows fallback when home is locked down
+#   4. <tmp>/iot-st-kitts-code       — last resort so the app never fails to boot
+def _resolve_data_dir() -> Path:
+    candidates: list[Path] = []
+    if os.environ.get("ISTKC_DATA_DIR"):
+        candidates.append(Path(os.environ["ISTKC_DATA_DIR"]))
+    candidates.append(Path.home() / ".iot-st-kitts-code")
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        candidates.append(Path(os.environ["LOCALAPPDATA"]) / "iot-st-kitts-code")
+    candidates.append(Path(tempfile.gettempdir()) / "iot-st-kitts-code")
+
+    for c in candidates:
+        try:
+            c.mkdir(parents=True, exist_ok=True)
+            probe = c / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return c
+        except Exception:
+            continue
+    return candidates[0]   # unreachable in practice; keeps type checkers happy
+
+
+DATA_DIR     = _resolve_data_dir()
 BRAIN_FILE   = DATA_DIR / "brain.json"
+BRAIN_BACKUP = DATA_DIR / "brain.json.bak"
 SESSIONS_DIR = DATA_DIR / "sessions"
 
 # ── NOVA persona injected into every system prompt ────────────────────────────
@@ -59,23 +90,36 @@ class Brain:
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def load(self) -> dict:
-        if not BRAIN_FILE.exists():
-            return dict(_EMPTY)
-        try:
-            data = json.loads(BRAIN_FILE.read_text("utf-8"))
-            for k, v in _EMPTY.items():        # back-fill any missing keys
-                data.setdefault(k, v)
-            return data
-        except Exception:
-            return dict(_EMPTY)
+        # Primary file first, then the last-known-good backup — a crash during
+        # a save must never cost the team its accumulated memory.
+        for candidate in (BRAIN_FILE, BRAIN_BACKUP):
+            if not candidate.exists():
+                continue
+            try:
+                data = json.loads(candidate.read_text("utf-8"))
+                for k, v in _EMPTY.items():    # back-fill any missing keys
+                    data.setdefault(k, v)
+                return data
+            except Exception:
+                continue
+        return dict(_EMPTY)
 
     def save(self, brain: dict) -> None:
         brain["updated"] = datetime.now(timezone.utc).isoformat()
-        BRAIN_FILE.write_text(
-            json.dumps(brain, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        payload = json.dumps(brain, indent=2, ensure_ascii=False)
+        # Atomic write: temp file + os.replace, keeping the previous good copy
+        # as .bak. A crash mid-write can no longer corrupt the brain.
+        tmp = BRAIN_FILE.with_suffix(".json.tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        if BRAIN_FILE.exists():
+            try:
+                os.replace(BRAIN_FILE, BRAIN_BACKUP)
+            except Exception:
+                pass
+        os.replace(tmp, BRAIN_FILE)
 
     def save_session(self, messages: list[dict], name: str = "") -> Path:
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)   # survive folder deletion mid-run
         ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
         slug = name.replace(" ", "_")[:40] if name else "session"
         path = SESSIONS_DIR / f"{ts}_{slug}.jsonl"
@@ -83,6 +127,14 @@ class Brain:
             for m in messages:
                 fh.write(json.dumps(m, ensure_ascii=False) + "\n")
         return path
+
+    def clear(self) -> None:
+        """Wipe long-term memory (keeps session archive). Old brain kept as .bak."""
+        if BRAIN_FILE.exists():
+            try:
+                os.replace(BRAIN_FILE, BRAIN_BACKUP)
+            except Exception:
+                BRAIN_FILE.unlink(missing_ok=True)
 
     def list_sessions(self, n: int = 10) -> list[Path]:
         return sorted(SESSIONS_DIR.glob("*.jsonl"), reverse=True)[:n]
@@ -165,12 +217,11 @@ class Brain:
                 max_tokens=600,
                 temperature=0.1,
             )
-            raw = resp.choices[0].message.content.strip()
-            # Strip markdown fences if the model wraps anyway
-            if "```" in raw:
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+            raw = (resp.choices[0].message.content or "").strip()
+            # Extract the outermost JSON object regardless of fences/prose
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if m:
+                raw = m.group(0)
             updates = json.loads(raw)
         except Exception:
             return brain   # distillation is best-effort; never crash
