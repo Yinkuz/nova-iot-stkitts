@@ -826,6 +826,50 @@ _BASE_TOOLS = [
 
 # ── Tool executor ─────────────────────────────────────────────────────────────
 
+def _py_search(pattern: str, file_pattern: str, workspace: str) -> str:
+    """Pure-Python recursive regex search — works on any OS, no grep needed."""
+    import fnmatch
+    try:
+        rx = re.compile(pattern)
+    except re.error as e:
+        return f"Invalid regex: {e}"
+    ws      = Path(workspace)
+    matches: list[str] = []
+    total   = 0
+    try:
+        for p in ws.rglob("*"):
+            if len(matches) >= 400 or total > 8_000:
+                break
+            if not p.is_file():
+                continue
+            if any(d in p.parts for d in _INDEX_SKIP_DIRS):
+                continue
+            if file_pattern and not fnmatch.fnmatch(p.name, file_pattern):
+                continue
+            try:
+                if p.stat().st_size > 1_000_000:
+                    continue
+                with p.open("r", encoding="utf-8", errors="replace") as fh:
+                    for ln, line in enumerate(fh, 1):
+                        if rx.search(line):
+                            rel  = p.relative_to(ws)
+                            item = f"{rel}:{ln}:{line.rstrip()[:300]}"
+                            matches.append(item)
+                            total += len(item)
+                            if len(matches) >= 400 or total > 8_000:
+                                break
+            except Exception:
+                continue
+    except Exception as e:
+        return f"Error searching: {e}"
+    if not matches:
+        return "(no matches)"
+    out = "\n".join(matches)
+    if total > 8_000:
+        out += "\n[...results truncated]"
+    return out
+
+
 def _strip_md_fences(text: str) -> str:
     """Remove a wrapping markdown code fence from output meant to be raw file content."""
     t = text.strip()
@@ -961,24 +1005,31 @@ def _execute_tool(name: str, args: dict, workspace: str) -> str:
             return f"Error running command: {e}"
 
     elif name == "search_code":
-        pattern     = args.get("pattern", "")
+        pattern      = args.get("pattern", "")
         file_pattern = args.get("file_pattern", "")
-        try:
-            cmd = ["grep", "-rn", "-E", pattern, workspace]
-            if file_pattern:
-                cmd = ["grep", "-rn", "-E", "--include", file_pattern, pattern, workspace]
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=15, encoding="utf-8", errors="replace",
-            )
-            out = result.stdout or "(no matches)"
-            if len(out) > 8_000:
-                out = out[:8_000] + "\n[...results truncated]"
-            return out
-        except subprocess.TimeoutExpired:
-            return "Search timed out."
-        except Exception as e:
-            return f"Error searching: {e}"
+        # Prefer grep where available (fast); fall back to pure-Python search
+        # everywhere else — grep does not exist on stock Windows, where this
+        # app primarily runs, so the fallback is the main path there.
+        if not _IS_WIN:
+            try:
+                cmd = ["grep", "-rn", "-E", pattern, workspace]
+                if file_pattern:
+                    cmd = ["grep", "-rn", "-E", "--include", file_pattern, pattern, workspace]
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    timeout=15, encoding="utf-8", errors="replace",
+                )
+                out = result.stdout or "(no matches)"
+                if len(out) > 8_000:
+                    out = out[:8_000] + "\n[...results truncated]"
+                return out
+            except subprocess.TimeoutExpired:
+                return "Search timed out."
+            except FileNotFoundError:
+                pass   # no grep — use the Python fallback below
+            except Exception as e:
+                return f"Error searching: {e}"
+        return _py_search(pattern, file_pattern, workspace)
 
     elif name == "create_document":
         path   = _resolve(args.get("path", ""), workspace)
@@ -1903,6 +1954,24 @@ class Handler(BaseHTTPRequestHandler):
 
         elif self.path == "/brain/distil":
             self._distil(body)
+
+        elif self.path == "/brain/clear":
+            with _lock:
+                _brain.clear()
+            _send_json(self, {"ok": True})
+
+        elif self.path == "/session/delete":
+            from istkc.brain import SESSIONS_DIR
+            fname = Path(body.get("file", "")).name   # basename only — no traversal
+            p = SESSIONS_DIR / fname
+            if fname and p.exists() and p.suffix == ".jsonl":
+                try:
+                    p.unlink()
+                    _send_json(self, {"ok": True})
+                except Exception as e:
+                    _send_json(self, {"ok": False, "error": str(e)})
+            else:
+                _send_json(self, {"ok": False, "error": "not found"}, 404)
 
         elif self.path == "/workspace/index":
             workspace = body.get("workspace", "")

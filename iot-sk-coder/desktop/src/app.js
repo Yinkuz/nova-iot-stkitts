@@ -1081,6 +1081,38 @@ function timestamp() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** Human-friendly relative time from a unix-seconds timestamp. */
+function timeAgo(unixSecs) {
+  if (!unixSecs) return '';
+  const d = Date.now() / 1000 - unixSecs;
+  if (d < 60)          return 'just now';
+  if (d < 3600)        return `${Math.floor(d / 60)}m ago`;
+  if (d < 86400)       return `${Math.floor(d / 3600)}h ago`;
+  if (d < 7 * 86400)   return `${Math.floor(d / 86400)}d ago`;
+  return new Date(unixSecs * 1000).toLocaleDateString();
+}
+
+// ── Smart auto-scroll ─────────────────────────────────────────────────────────
+// Only follow streaming output while the user is at the bottom. Scrolling up
+// to read pauses following; a floating "↓ Latest" button jumps back.
+let _stickToBottom = true;
+
+function scrollMessages(force = false) {
+  const sc = el.messages.parentElement;
+  if (force) _stickToBottom = true;
+  if (_stickToBottom) sc.scrollTop = sc.scrollHeight;
+}
+
+function initSmartScroll() {
+  const sc   = el.messages.parentElement;
+  const jump = document.getElementById('jump-latest-btn');
+  sc.addEventListener('scroll', () => {
+    _stickToBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 60;
+    jump?.classList.toggle('hidden', _stickToBottom);
+  });
+  jump?.addEventListener('click', () => scrollMessages(true));
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // CODE RENDERING  (syntax highlighting, copy & apply buttons)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1414,11 +1446,12 @@ function renderSessionsList(sessions, isSearch = false) {
     div.className = `session-item${isPinned ? ' pinned' : ''}`;
     div.dataset.file = s.file;
 
-    const ts = s.stem?.slice(0, 15)?.replace('_', ' ') || '';
+    const ts = timeAgo(s.mtime) || s.stem?.slice(0, 15)?.replace('_', ' ') || '';
     div.innerHTML = `
       <div class="sess-top-row">
         <div class="sess-preview">${escapeHtml(s.preview || '(empty session)')}</div>
         <button class="sess-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin' : 'Pin session'}">★</button>
+        <button class="sess-del-btn" title="Delete session">🗑</button>
       </div>
       <div class="sess-meta">${ts} · ${s.count} msg${s.count !== 1 ? 's' : ''}</div>`;
 
@@ -1428,6 +1461,16 @@ function renderSessionsList(sessions, isSearch = false) {
       else                              _pinnedSessions.add(s.file);
       _savePinned();
       loadSessionsList();
+    });
+    div.querySelector('.sess-del-btn').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete this session?\n\n"${s.preview || s.file}"`)) return;
+      const r = await api('/session/delete', { file: s.file }).catch(() => ({ ok: false }));
+      if (r.ok) {
+        _pinnedSessions.delete(s.file);
+        _savePinned();
+        loadSessionsList();
+      }
     });
     div.addEventListener('click', () => restoreSession(s.file, div));
     list.appendChild(div);
@@ -1457,7 +1500,7 @@ async function restoreSession(file, itemEl) {
   // Mark active
   document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
   itemEl?.classList.add('active');
-  el.messages.parentElement.scrollTop = el.messages.parentElement.scrollHeight;
+  scrollMessages(true);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1831,7 +1874,7 @@ function addMessage(role, content, opts = {}) {
   }
 
   el.messages.appendChild(card);
-  el.messages.parentElement.scrollTop = el.messages.parentElement.scrollHeight;
+  scrollMessages(role === 'user');   // sending always jumps down; other cards respect reading position
   return card;
 }
 
@@ -1846,7 +1889,7 @@ function updateLastMessage(card, text, done = false) {
     body.insertBefore(textEl, body.firstChild);
   }
   textEl.innerHTML = renderMarkdown(text) + (done ? '' : '<span class="cursor-blink"></span>');
-  el.messages.parentElement.scrollTop = el.messages.parentElement.scrollHeight;
+  scrollMessages();
 }
 
 async function sendMessage(text) {
@@ -1957,7 +2000,40 @@ function finishResponse() {
   state.streaming = false;
   showDoneFlash();
   el.msgInput.focus();
+  maybeAutoSaveBrain();   // periodic background memory save — survives crashes
 }
+
+// ── Crash-proof memory ────────────────────────────────────────────────────────
+// Memory used to be saved only when the user clicked the titlebar ✕ — a crash
+// or force-kill lost the whole session. Now: distil in the background every
+// few turns, and flush via sendBeacon on any window unload.
+const _AUTOSAVE_EVERY = 6;   // user turns between background distils
+let _lastDistilCount  = 0;
+
+function maybeAutoSaveBrain() {
+  if (!state.modelCfg) return;
+  const userTurns = state.messages.filter(m => m.role === 'user').length;
+  if (userTurns - _lastDistilCount < _AUTOSAVE_EVERY) return;
+  _lastDistilCount = userTurns;
+  api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg })
+    .then(r => {
+      if (!r?.ok) return;
+      return api('/brain').then(bd => { state.brainData = bd; updateBrainStats(bd); });
+    })
+    .catch(() => {});   // best-effort — never interrupt the user
+}
+
+window.addEventListener('beforeunload', () => {
+  if (state.messages.length > 2 && state.modelCfg) {
+    try {
+      const payload = new Blob(
+        [JSON.stringify({ messages: state.messages, model_cfg: state.modelCfg })],
+        { type: 'application/json' },
+      );
+      navigator.sendBeacon(BRIDGE + '/brain/distil', payload);   // survives window teardown
+    } catch { /* best-effort */ }
+  }
+});
 
 // ── Tool call inline rendering ────────────────────────────────────────────────
 function renderToolEvent(card, evt) {
@@ -2994,6 +3070,7 @@ async function clearChat() {
   state.messages   = [];
   state.ctxSummary = '';
   _lastNovaCard    = null;
+  _lastDistilCount = 0;
   el.messages.innerHTML = '';
   state.sessionNum++;
   state.orchestrator.activeTask   = null;
@@ -3040,6 +3117,33 @@ async function showBrainPanel() {
   state.brainData = bd;
   el.brainBody.innerHTML = '';
 
+  // Action bar: last-saved time + save/clear controls
+  const actions = document.createElement('div');
+  actions.className = 'brain-actions';
+  const updatedTs = bd.updated ? Date.parse(bd.updated) / 1000 : 0;
+  actions.innerHTML = `
+    <span class="brain-updated">${updatedTs ? '🧠 Saved ' + timeAgo(updatedTs) : '🧠 Not saved yet'}</span>
+    <span class="brain-actions-spacer"></span>
+    <button id="brain-save-now-btn" class="brain-act-btn" title="Distil this conversation into long-term memory now">💾 Save now</button>
+    <button id="brain-clear-btn" class="brain-act-btn danger" title="Wipe long-term memory (a backup is kept)">🗑 Clear</button>`;
+  el.brainBody.appendChild(actions);
+
+  actions.querySelector('#brain-save-now-btn').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    await api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg }).catch(() => {});
+    btn.disabled = false;
+    showBrainPanel();   // re-render with fresh stats + timestamp
+    loadSessionsList();
+  });
+  actions.querySelector('#brain-clear-btn').addEventListener('click', async () => {
+    if (!confirm('Clear NOVA\'s long-term memory?\n\nFacts, projects and decisions will be wiped. A backup copy is kept on disk, and past session archives are not affected.')) return;
+    await api('/brain/clear', {}).catch(() => {});
+    state.brainData = {};
+    updateBrainStats({});
+    showBrainPanel();
+  });
+
   const sec = (title, items) => {
     if (!items?.length) return;
     const t = document.createElement('div');
@@ -3080,7 +3184,10 @@ async function showBrainPanel() {
   sec('Decisions', bd.decisions);
 
   if (!bd.recent_summary && !bd.projects?.length && !bd.facts?.length) {
-    el.brainBody.innerHTML = '<p style="color:var(--text-3);font-size:13px">No memories yet. Start chatting to build NOVA\'s brain.</p>';
+    const empty = document.createElement('p');
+    empty.style.cssText = 'color:var(--text-3);font-size:13px';
+    empty.textContent = 'No memories yet. Start chatting to build NOVA\'s brain.';
+    el.brainBody.appendChild(empty);   // append — keep the action bar visible
   }
 
   openPanel('brain-panel');
@@ -3121,6 +3228,7 @@ document.querySelectorAll('input[name="mp-routing-mode"]').forEach(radio => {
     if (!radio.checked) return;
     state.routing.mode = radio.value;
     localStorage.setItem('nova_routing', radio.value);
+    updateModelDisplay();   // refresh the routing line in the capability tooltip
     addMessage('system-note', radio.value === 'auto'
       ? '⚡ Smart routing ON — NOVA picks the best model for each task.'
       : '🔒 Manual mode — NOVA will always use your selected model.');
@@ -3231,7 +3339,7 @@ function showBriefPanel(brief) {
   inChat.className = 'brief-card';
   inChat.innerHTML = el.briefBody.innerHTML;
   el.messages.appendChild(inChat);
-  el.messages.parentElement.scrollTop = el.messages.parentElement.scrollHeight;
+  scrollMessages(true);
 
   openPanel('brief-panel');
 }
@@ -3314,7 +3422,8 @@ el.sendBtn.addEventListener('click', () => {
 
 el.msgInput.addEventListener('input', () => {
   autoResize();
-  el.charCount.textContent = el.msgInput.value.length > 0 ? `${el.msgInput.value.length} chars` : '';
+  const len = el.msgInput.value.length;
+  el.charCount.textContent = len > 0 ? `${len} chars · ~${Math.ceil(len / 4)} tok` : '';
 });
 
 function autoResize() {
@@ -3362,6 +3471,17 @@ function updateModelDisplay() {
   const name = (state.modelCfg?.display || 'No model').split('(')[0].trim().split('—')[0].trim().split(' ').slice(0,2).join(' ');
   el.modelPillName.textContent = name;
   el.chatModelBadge.textContent = name;
+
+  // Capability tooltip so engineers can see at a glance what the model can do
+  if (state.modelCfg) {
+    const c  = capsFor(state.modelCfg.api_id);
+    const tip = `${state.modelCfg.api_id}\n` +
+      `Context ~${c.ctx}K · ${c.vision ? '🖼 vision' : 'no vision'} · ${c.tools ? '🛠 tools' : 'no tools'}\n` +
+      `Coding ${c.coding}/5 · Reasoning ${c.reasoning}/3 · Speed ${c.speed}/5\n` +
+      `Routing: ${state.routing.mode === 'auto' ? 'Auto (smart)' : 'Manual lock'}`;
+    el.modelPill.title      = tip;
+    el.chatModelBadge.title = tip;
+  }
 }
 
 function updateSessionHeader() {
@@ -3403,6 +3523,7 @@ async function launchApp() {
   startIdleAnimation();
 
   // Init all subsystems
+  initSmartScroll();
   initDragDrop();
   initTheme();
   initUploadButtons();
