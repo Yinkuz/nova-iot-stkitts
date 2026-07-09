@@ -118,14 +118,29 @@ class Brain:
                 pass
         os.replace(tmp, BRAIN_FILE)
 
-    def save_session(self, messages: list[dict], name: str = "") -> Path:
+    def save_session(self, messages: list[dict], name: str = "",
+                     session_id: str = "") -> Path:
+        """Archive a conversation.
+
+        When session_id is supplied the SAME file is overwritten, so one
+        conversation maps to exactly one archive that updates in place —
+        periodic auto-saves no longer spawn duplicate session files. Without
+        an id a fresh timestamped file is created (legacy behaviour).
+        """
         SESSIONS_DIR.mkdir(parents=True, exist_ok=True)   # survive folder deletion mid-run
-        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
-        slug = name.replace(" ", "_")[:40] if name else "session"
-        path = SESSIONS_DIR / f"{ts}_{slug}.jsonl"
-        with path.open("w", encoding="utf-8") as fh:
+        if session_id:
+            fname = re.sub(r"[^0-9A-Za-z_.-]", "", session_id)[:60] or "session"
+            path  = SESSIONS_DIR / f"{fname}.jsonl"
+        else:
+            ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+            slug = name.replace(" ", "_")[:40] if name else "session"
+            path = SESSIONS_DIR / f"{ts}_{slug}.jsonl"
+        # Atomic write so a crash mid-archive can't leave a half-written file
+        tmp = path.with_suffix(".jsonl.tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
             for m in messages:
                 fh.write(json.dumps(m, ensure_ascii=False) + "\n")
+        os.replace(tmp, path)
         return path
 
     def clear(self) -> None:

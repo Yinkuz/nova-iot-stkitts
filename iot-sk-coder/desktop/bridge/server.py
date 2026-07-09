@@ -477,8 +477,10 @@ _BASE_TOOLS = [
             "name": "run_command",
             "description": (
                 "Execute a shell command and capture stdout + stderr. "
-                "Use for running tests, builds, linters, git commands, or inspecting the environment. "
-                "Keep commands non-interactive; they time out after 30 s."
+                "Use for running tests, builds, linters, installs, git commands, or inspecting "
+                "the environment. Keep commands non-interactive. Default timeout is 120 s; for "
+                "long jobs (npm/pip install, full test suites, builds) pass a larger 'timeout' "
+                "up to 600 s."
             ),
             "parameters": {
                 "type": "object",
@@ -490,6 +492,10 @@ _BASE_TOOLS = [
                     "cwd": {
                         "type": "string",
                         "description": "Working directory (defaults to workspace root).",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Max seconds to wait before killing the command (default 120, max 600).",
                     },
                 },
                 "required": ["command"],
@@ -936,6 +942,13 @@ def _execute_tool(name: str, args: dict, workspace: str) -> str:
         cmd = args.get("command", "")
         cwd_arg = args.get("cwd", workspace)
         cwd = str(_resolve(cwd_arg, workspace))
+        # Configurable timeout so installs/builds/test-suites don't get cut off
+        # at 30 s. Default 120 s, hard ceiling 600 s.
+        try:
+            _timeout = int(args.get("timeout", 120))
+        except (TypeError, ValueError):
+            _timeout = 120
+        _timeout = max(1, min(_timeout, 600))
         _utf8_env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
         try:
             # On Windows, background processes launched via `start /B` or `&`
@@ -984,12 +997,23 @@ def _execute_tool(name: str, args: dict, workspace: str) -> str:
             t_out.start(); t_err.start()
 
             try:
-                proc.wait(timeout=30)
+                proc.wait(timeout=_timeout)
             except subprocess.TimeoutExpired:
-                try: proc.kill()
-                except Exception: pass
+                # Kill the whole process tree so shells that spawned children
+                # (npm, make, pytest -n) don't leave orphans holding the pipes.
+                try:
+                    if _IS_WIN:
+                        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                       capture_output=True)
+                    else:
+                        proc.kill()
+                except Exception:
+                    pass
                 t_out.join(2); t_err.join(2)
-                return "Command timed out after 30 s."
+                partial = "".join(stdout_chunks)[-2000:].rstrip()
+                return (f"Command timed out after {_timeout} s (killed)."
+                        + (f"\n--- partial output ---\n{partial}" if partial else "")
+                        + "\nTip: pass a larger 'timeout' (up to 600) for long installs/builds.")
 
             t_out.join(3); t_err.join(3)
             stdout = "".join(stdout_chunks).rstrip()
@@ -1740,8 +1764,15 @@ class Handler(BaseHTTPRequestHandler):
         # ── /sessions ────────────────────────────────────────────────────────
         elif route == "/sessions":
             from istkc.brain import SESSIONS_DIR
+            # Sort by last-activity (mtime) so an updated conversation floats to
+            # the top — stable-id files are rewritten as the chat continues.
+            paths = sorted(
+                SESSIONS_DIR.glob("*.jsonl"),
+                key=lambda p: p.stat().st_mtime if p.exists() else 0,
+                reverse=True,
+            )[:40]
             items = []
-            for p in sorted(SESSIONS_DIR.glob("*.jsonl"), reverse=True)[:30]:
+            for p in paths:
                 try:
                     lines   = [l for l in p.read_text("utf-8").splitlines() if l.strip()]
                     msgs    = [json.loads(l) for l in lines]
@@ -1754,8 +1785,10 @@ class Handler(BaseHTTPRequestHandler):
                                     x.get("text", "") for x in c
                                     if isinstance(x, dict) and x.get("type") == "text"
                                 )
-                            preview = str(c)[:80]
-                            break
+                            txt = str(c).strip()
+                            if txt:
+                                preview = txt[:80]
+                                break
                     items.append({
                         "file":    p.name,
                         "stem":    p.stem,
@@ -1954,6 +1987,21 @@ class Handler(BaseHTTPRequestHandler):
 
         elif self.path == "/brain/distil":
             self._distil(body)
+
+        elif self.path == "/session/save":
+            # Cheap archive — no LLM. Overwrites the conversation's own file so
+            # one conversation stays one archive that updates in place.
+            messages   = body.get("messages", [])
+            session_id = body.get("session_id", "")
+            if len(messages) < 1:
+                _send_json(self, {"ok": False, "error": "no messages"})
+            else:
+                try:
+                    with _lock:
+                        p = _brain.save_session(messages, session_id=session_id)
+                    _send_json(self, {"ok": True, "file": p.name})
+                except Exception as e:
+                    _send_json(self, {"ok": False, "error": str(e)})
 
         elif self.path == "/brain/clear":
             with _lock:
@@ -2356,15 +2404,16 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── Brain distillation ────────────────────────────────────────────────────
     def _distil(self, body: dict) -> None:
-        messages  = body.get("messages",  [])
-        model_cfg = body.get("model_cfg", {})
+        messages   = body.get("messages",  [])
+        model_cfg  = body.get("model_cfg", {})
+        session_id = body.get("session_id", "")
         try:
             from istkc.models import make_client
             client = make_client(model_cfg)
             with _lock:
                 bd      = _brain.load()
                 updated = _brain.distil(client, model_cfg["api_id"], messages, bd)
-                _brain.save_session(messages)
+                _brain.save_session(messages, session_id=session_id)
                 _brain.save(updated)
             _send_json(self, {"ok": True, "stats": _brain.stats(updated)})
         except Exception as exc:

@@ -22,7 +22,7 @@
 
   --text-1:    #dde6f5;
   --text-2:    #8fa3c0;
-  --text-3:    #465a73;
+  --text-3:    #6b82a3;
 
   --green:     #22c55e;
   --yellow:    #f59e0b;
@@ -467,23 +467,12 @@ body {
 #sessions-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   flex: 1;
   overflow-y: auto;
 }
-.session-item {
-  padding: 7px 10px;
-  border-radius: var(--radius);
-  font-size: 11px;
-  color: var(--text-2);
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: background .15s, color .15s;
-}
-.session-item:hover { background: var(--bg-4); color: var(--text-1); }
-.session-item.active { background: rgba(0,217,255,.08); color: var(--nova); border-left: 2px solid var(--nova); }
+/* Canonical .session-item styling lives in the SESSIONS block below
+   (near .sess-preview) so there is a single source of truth. */
 
 /* Footer */
 #sb-footer {
@@ -1468,26 +1457,30 @@ body {
 
 /* ── Session items in sidebar ────────────────────────────────────────────── */
 .session-item {
-  padding: 8px 12px;
+  padding: 8px 10px;
   border-radius: var(--radius);
   cursor: pointer;
-  margin: 2px 0;
-  transition: background .15s;
+  transition: background .15s, border-color .15s;
   border: 1px solid transparent;
+  background: var(--bg-2);
 }
-.session-item:hover { background: var(--bg-3); border-color: var(--border); }
-.session-item.active { background: rgba(99,202,183,.08); border-color: rgba(99,202,183,.25); }
+.session-item:hover        { background: var(--bg-4); border-color: var(--border-2, var(--border)); }
+.session-item.active       { background: var(--nova-glow, rgba(0,217,255,.10)); border-color: var(--nova); }
+.session-item.active .sess-preview { color: var(--text-1); }
 .sess-preview {
-  font-size: 11px;
-  color: var(--text-2);
+  font-size: 12px;
+  color: var(--text-1);                 /* was --text-2: near-invisible on dark themes */
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.3;
 }
 .sess-meta {
   font-size: 10px;
-  color: var(--text-3);
-  margin-top: 2px;
+  color: var(--text-2);                 /* was --text-3: too dark to read */
+  margin-top: 3px;
+  letter-spacing: .2px;
 }
 
 /* ── Ollama provider badge ───────────────────────────────────────────────── */
@@ -1783,7 +1776,7 @@ body {
   --nova-pulse:rgba(245, 158, 11, .06);
   --text-1:    #fde68a;
   --text-2:    #b8861a;
-  --text-3:    #6b4e0f;
+  --text-3:    #9c7418;
 }
 
 /* ── Violet · electric purple on deep indigo-black ──────────────────────── */
@@ -1802,7 +1795,7 @@ body {
   --nova-pulse:rgba(168, 85, 247, .06);
   --text-1:    #ede9fe;
   --text-2:    #9270c0;
-  --text-3:    #513a7a;
+  --text-3:    #7a5ba8;
 }
 
 /* ── Crimson · blood-red on near-black ──────────────────────────────────── */
@@ -1821,7 +1814,7 @@ body {
   --nova-pulse:rgba(248, 113, 113, .06);
   --text-1:    #fee2e2;
   --text-2:    #c07070;
-  --text-3:    #7a3535;
+  --text-3:    #b07a7a;
 }
 
 /* ── Ocean · sky-blue on deep navy-black ────────────────────────────────── */
@@ -1840,7 +1833,7 @@ body {
   --nova-pulse:rgba(56, 189, 248, .06);
   --text-1:    #e0f2fe;
   --text-2:    #6baac8;
-  --text-3:    #2a5c7a;
+  --text-3:    #5f92b0;
 }
 
 /* ── Matrix · phosphor-green on terminal black ───────────────────────────── */
@@ -1859,7 +1852,7 @@ body {
   --nova-pulse:rgba(74, 222, 128, .06);
   --text-1:    #dcfce7;
   --text-2:    #6dba88;
-  --text-3:    #2d6b44;
+  --text-3:    #4e9d6c;
 }
 
 /* ── Theme picker strip ──────────────────────────────────────────────────── */

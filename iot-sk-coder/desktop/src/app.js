@@ -406,7 +406,18 @@ const state = {
   paths:        { novaRoot: '', openDesign: '', desktopDir: '', homeDir: '' },
   orchestrator: { activeTask: null, driftWarnings: 0 },
   routing:      { mode: localStorage.getItem('nova_routing') || 'auto' },   // 'auto' | 'manual'
+  sessionId:    '',          // stable archive id for THIS conversation (one file, updated in place)
+  currentSessionFile: '',    // <sessionId>.jsonl of the loaded/active conversation
 };
+
+// Fresh archive id for a new conversation. Sortable (embeds a timestamp) so the
+// sessions list stays chronological; unique suffix avoids same-second collisions.
+function newSessionId() {
+  const d = new Date();
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `s_${stamp}_${Math.random().toString(36).slice(2, 6)}`;
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -1478,29 +1489,47 @@ function renderSessionsList(sessions, isSearch = false) {
 }
 
 async function restoreSession(file, itemEl) {
-  if (!confirm(`Restore this session? Current chat will be cleared.`)) return;
+  if (state.streaming) { addMessage('system-note', 'Finish the current response before switching sessions.'); return; }
+  // Already the live conversation (either restored, or its own auto-archive) — no-op
+  if (file === state.currentSessionFile || file === state.sessionId + '.jsonl') return;
+
   const res = await api(`/session?file=${encodeURIComponent(file)}`).catch(() => null);
-  if (!res?.messages) { addMessage('system-note', 'Could not load session.'); return; }
+  if (!res?.messages?.length) { addMessage('system-note', 'Could not load session (empty or missing).'); return; }
 
-  // Clear current chat
-  state.messages = [];
-  el.messages.innerHTML = '';
+  // Non-destructive: archive the current conversation before switching away so
+  // nothing is lost and it stays in the list to return to.
+  await archiveSession();
 
-  // Replay messages
+  // Adopt the loaded conversation's identity — continuing appends to ITS file,
+  // so a restored session is fully reusable, not a read-only snapshot.
+  state.sessionId         = file.replace(/\.jsonl$/, '');
+  state.currentSessionFile = file;
+  state.messages          = [];
+  state.ctxSummary        = '';
+  _lastNovaCard           = null;
+  _lastDistilCount        = res.messages.filter(m => m.role === 'user').length;
+  el.messages.innerHTML   = '';
+
+  // Replay messages with their attachments rendered
   for (const m of res.messages) {
     state.messages.push(m);
     const role    = m.role === 'user' ? 'user' : 'nova';
     const content = typeof m.content === 'string' ? m.content
                   : (m.content.find?.(p => p.type === 'text')?.text || '[multimodal message]');
-    addMessage(role, content);
+    if (m.role === 'system') continue;   // don't render system turns
+    const card = addMessage(role, content);
+    if (role === 'nova') attachRetryButton(card);
   }
+  _lastNovaCard = [...el.messages.querySelectorAll('.msg-card.nova')].pop() || null;
 
-  addMessage('system-note', `Session restored from ${file}`);
+  addMessage('system-note', `↩ Resumed session — keep chatting to continue where you left off.`);
+  updateContextMeter();
 
   // Mark active
   document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
   itemEl?.classList.add('active');
   scrollMessages(true);
+  el.msgInput.focus();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2004,18 +2033,36 @@ function finishResponse() {
 }
 
 // ── Crash-proof memory ────────────────────────────────────────────────────────
-// Memory used to be saved only when the user clicked the titlebar ✕ — a crash
-// or force-kill lost the whole session. Now: distil in the background every
-// few turns, and flush via sendBeacon on any window unload.
-const _AUTOSAVE_EVERY = 6;   // user turns between background distils
-let _lastDistilCount  = 0;
+// Two independent layers so a conversation is never lost AND is always reusable:
+//   1. Archive — cheap, no LLM. Overwrites this conversation's own file after
+//      every turn, so the sessions list is always current and one chat = one
+//      entry (no duplicates). Makes sessions instantly reusable.
+//   2. Distil — LLM extraction into long-term brain, run less often (cost).
+// Both flush on window unload via sendBeacon so a crash/force-kill loses nothing.
+const _DISTIL_EVERY  = 6;   // user turns between background LLM distils
+let _lastDistilCount = 0;
+
+/** Cheap archive of the live conversation to its stable file (no LLM). */
+function archiveSession() {
+  if (!state.messages.length || !state.sessionId) return Promise.resolve();
+  return api('/session/save', {
+    messages:   state.messages,
+    session_id: state.sessionId,
+  }).then(() => loadSessionsList()).catch(() => {});
+}
 
 function maybeAutoSaveBrain() {
   if (!state.modelCfg) return;
+  archiveSession();   // always keep the archive current (cheap)
+
   const userTurns = state.messages.filter(m => m.role === 'user').length;
-  if (userTurns - _lastDistilCount < _AUTOSAVE_EVERY) return;
+  if (userTurns - _lastDistilCount < _DISTIL_EVERY) return;
   _lastDistilCount = userTurns;
-  api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg })
+  api('/brain/distil', {
+    messages:   state.messages,
+    model_cfg:  state.modelCfg,
+    session_id: state.sessionId,
+  })
     .then(r => {
       if (!r?.ok) return;
       return api('/brain').then(bd => { state.brainData = bd; updateBrainStats(bd); });
@@ -2024,15 +2071,16 @@ function maybeAutoSaveBrain() {
 }
 
 window.addEventListener('beforeunload', () => {
-  if (state.messages.length > 2 && state.modelCfg) {
-    try {
-      const payload = new Blob(
-        [JSON.stringify({ messages: state.messages, model_cfg: state.modelCfg })],
-        { type: 'application/json' },
-      );
-      navigator.sendBeacon(BRIDGE + '/brain/distil', payload);   // survives window teardown
-    } catch { /* best-effort */ }
-  }
+  if (!state.messages.length || !state.modelCfg) return;
+  try {
+    const send = (path, extra) => navigator.sendBeacon(
+      BRIDGE + path,
+      new Blob([JSON.stringify({ messages: state.messages, session_id: state.sessionId, ...extra })],
+               { type: 'application/json' }),
+    );
+    send('/session/save', {});                              // guarantee the archive
+    if (state.messages.length > 2) send('/brain/distil', { model_cfg: state.modelCfg });
+  } catch { /* best-effort */ }
 });
 
 // ── Tool call inline rendering ────────────────────────────────────────────────
@@ -3067,11 +3115,17 @@ async function injectWorkspaceContext() {
 }
 
 async function clearChat() {
+  // Archive the outgoing conversation so it stays reusable in the list
+  await archiveSession();
+
   state.messages   = [];
   state.ctxSummary = '';
   _lastNovaCard    = null;
   _lastDistilCount = 0;
+  state.sessionId          = newSessionId();   // fresh archive identity
+  state.currentSessionFile = '';
   el.messages.innerHTML = '';
+  document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
   state.sessionNum++;
   state.orchestrator.activeTask   = null;
   state.orchestrator.driftWarnings = 0;
@@ -3085,7 +3139,7 @@ async function clearChat() {
 }
 
 async function saveSession(name) {
-  await api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg });
+  await api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg, session_id: state.sessionId });
   addMessage('system-note', `Session saved${name ? ': ' + name : ''}. Brain updated.`);
   await loadSessionsList();   // refresh sidebar so this session appears immediately
 }
@@ -3131,7 +3185,7 @@ async function showBrainPanel() {
   actions.querySelector('#brain-save-now-btn').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = 'Saving…';
-    await api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg }).catch(() => {});
+    await api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg, session_id: state.sessionId }).catch(() => {});
     btn.disabled = false;
     showBrainPanel();   // re-render with fresh stats + timestamp
     loadSessionsList();
@@ -3446,10 +3500,13 @@ document.querySelectorAll('.chip').forEach(chip => {
 
 $('tb-min').addEventListener('click',   () => window.electronAPI?.minimize());
 $('tb-max').addEventListener('click',   () => window.electronAPI?.maximize());
-$('tb-close').addEventListener('click', () => {
-  // Auto-save brain on close
+$('tb-close').addEventListener('click', async () => {
+  // Archive (cheap, guaranteed) + distil (LLM) before the window closes
+  if (state.messages.length && state.sessionId) {
+    try { await archiveSession(); } catch {}
+  }
   if (state.messages.length > 2 && state.modelCfg) {
-    api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg })
+    api('/brain/distil', { messages: state.messages, model_cfg: state.modelCfg, session_id: state.sessionId })
       .finally(() => window.electronAPI?.close());
   } else {
     window.electronAPI?.close();
@@ -3564,7 +3621,8 @@ async function launchApp() {
     ? `Hello! I remember **${nMem}** things about your team and projects. What would you like to build or fix today?`
     : `Hello! I'm NOVA, your IOT St. Kitts coding assistant. Describe what you'd like to build or fix and I'll help you make it happen. Type **\`/help\`** to see all commands.`;
 
-  state.messages = [];
+  state.messages  = [];
+  state.sessionId = newSessionId();   // this fresh conversation gets its own archive
   addMessage('nova', greeting);
   el.msgInput.focus();
 }
