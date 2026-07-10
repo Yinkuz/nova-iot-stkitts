@@ -64,6 +64,10 @@ _tl    = threading.local()             # per-thread: sse_cb, model_cfg
 
 PORT = 7823
 
+# App version that spawned this bridge (upgrade handshake — Electron replaces
+# any running bridge whose app_version doesn't match its own).
+_APP_VERSION = os.environ.get("ISTKC_APP_VERSION", "")
+
 
 # ── Core dependency bootstrap ─────────────────────────────────────────────────
 # Fresh machines (especially macOS) won't have the 'openai' package in the
@@ -87,7 +91,19 @@ def _ensure_openai() -> str | None:
         except ImportError:
             pass
         print("[bridge] 'openai' package missing — installing…", flush=True)
-        for extra in (["--user"], []):       # --user first; bare retry for venvs
+        # Try each pip mode until one works:
+        #   --user                      → classic per-user site-packages
+        #   (bare)                      → virtualenvs, where --user is invalid
+        #   --break-system-packages    → PEP 668 "externally-managed" Pythons
+        #                                 (Homebrew/Debian) that refuse the above
+        _variants = (
+            ["--user"],
+            [],
+            ["--user", "--break-system-packages"],
+            ["--break-system-packages"],
+        )
+        last_err = ""
+        for extra in _variants:
             try:
                 r = subprocess.run(
                     [sys.executable, "-m", "pip", "install", "--quiet", *extra, "openai>=1.0"],
@@ -95,7 +111,9 @@ def _ensure_openai() -> str | None:
                 )
                 if r.returncode == 0:
                     break
-            except Exception:
+                last_err = (r.stderr or r.stdout or "").strip()[-400:]
+            except Exception as e:
+                last_err = str(e)
                 continue
         importlib.invalidate_caches()
         try:
@@ -103,11 +121,12 @@ def _ensure_openai() -> str | None:
             print("[bridge] 'openai' installed OK", flush=True)
             return None
         except ImportError:
+            detail = f"\n\npip said:\n{last_err}" if last_err else ""
             return (
                 "The Python package 'openai' is not installed and automatic install "
-                f"failed (no internet or pip blocked?). Open a terminal and run:\n"
+                "failed (no internet, or pip blocked?). Open a terminal and run:\n"
                 f"    {sys.executable} -m pip install openai\n"
-                "then try again."
+                "then try again." + detail
             )
 
 
@@ -1788,10 +1807,11 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/health":
             bd = _brain.load()
             _send_json(self, {
-                "ok":      True,
-                "version": "0.1.0-istkc",
-                "brain":   _brain.stats(bd),
-                "authed":  is_authenticated(),
+                "ok":          True,
+                "version":     "0.1.0-istkc",
+                "app_version": _APP_VERSION,   # upgrade handshake (see main.js)
+                "brain":       _brain.stats(bd),
+                "authed":      is_authenticated(),
             })
 
         # ── /brain ───────────────────────────────────────────────────────────
@@ -2489,18 +2509,18 @@ def run(port: int = PORT) -> None:
     try:
         server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     except OSError:
-        # Port already in use — check if it's already our bridge
+        # Port already in use — reuse ONLY if it's our bridge from the SAME app
+        # version; a stale bridge from a previous install must not be adopted.
         try:
             import urllib.request as _ur, json as _jj
             resp = _ur.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
             data = _jj.loads(resp.read())
-            if data.get("ok"):
-                # Our bridge is already running — signal Electron to reuse it
+            if data.get("ok") and data.get("app_version") == _APP_VERSION:
                 print(f"BRIDGE_READY:{port}", flush=True)
                 return
         except Exception:
             pass
-        print(f"[bridge] Port {port} already in use. Exiting.", flush=True)
+        print(f"[bridge] Port {port} already in use (or stale bridge). Exiting.", flush=True)
         sys.exit(1)
     print(f"BRIDGE_READY:{port}", flush=True)   # Electron reads this line
     server.serve_forever()

@@ -24,7 +24,7 @@ let bridge     = null;
 
 // ── Python bridge ─────────────────────────────────────────────────────────────
 
-/** Returns true if a NOVA bridge is already listening on the given port. */
+/** Returns the /health JSON of a NOVA bridge listening on the port, or null. */
 function checkExistingBridge(port) {
   return new Promise((resolve) => {
     const req = http.get(
@@ -33,13 +33,27 @@ function checkExistingBridge(port) {
         let data = '';
         res.on('data', (d) => { data += d; });
         res.on('end', () => {
-          try { resolve(JSON.parse(data).ok === true); } catch { resolve(false); }
+          try {
+            const health = JSON.parse(data);
+            resolve(health.ok === true ? health : null);
+          } catch { resolve(null); }
         });
       }
     );
-    req.on('error',   () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error',   () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
   });
+}
+
+/**
+ * True when the running bridge was spawned by THIS app version.
+ * The bridge outlives the app on purpose (fast relaunch), so after an upgrade
+ * a stale bridge from the previous version can still hold the port — reusing
+ * it silently serves old server code. Bridges report the app version that
+ * spawned them; older bridges don't report one at all → always replaced.
+ */
+function bridgeVersionMatches(health, appVersion) {
+  return !!health && health.app_version === appVersion;
 }
 
 /** Kill any process currently listening on the bridge port so a fresh spawn can bind. */
@@ -96,8 +110,9 @@ function startBridge() {
       }
       const cmd  = pythonCmds[tried++];
       const env  = Object.assign({}, process.env, {
-        ISTKC_TEAM_TOKEN: process.env.ISTKC_TEAM_TOKEN || 'ISTKC-2025-ELCZ7OSB',
-        PYTHONIOENCODING: 'utf-8',
+        ISTKC_TEAM_TOKEN:  process.env.ISTKC_TEAM_TOKEN || 'ISTKC-2025-ELCZ7OSB',
+        ISTKC_APP_VERSION: app.getVersion(),   // bridge reports this in /health for the upgrade handshake
+        PYTHONIOENCODING:  'utf-8',
       });
       const proc = spawn(cmd, [serverScript, String(BRIDGE_PORT)], {
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -432,10 +447,15 @@ ipcMain.handle('get-paths', () => {
 app.whenReady().then(async () => {
   let port = BRIDGE_PORT;
 
-  // Fast path: if a healthy bridge is already running, reuse it immediately.
-  const alreadyUp = await checkExistingBridge(BRIDGE_PORT);
-  if (!alreadyUp) {
-    // Clear any zombie process that is holding the port but not responding
+  // Fast path: reuse a running bridge ONLY if it was spawned by this exact app
+  // version. A bridge left over from a previous install must be replaced, or
+  // the upgraded app keeps talking to old server code.
+  const health = await checkExistingBridge(BRIDGE_PORT);
+  if (!bridgeVersionMatches(health, app.getVersion())) {
+    if (health) {
+      console.log(`Stale bridge (v${health.app_version || 'pre-1.3.2'}) on port ${BRIDGE_PORT} — replacing with v${app.getVersion()}`);
+    }
+    // Clear any old/zombie process holding the port
     await killStalePort(BRIDGE_PORT);
     try {
       port = await startBridge();
