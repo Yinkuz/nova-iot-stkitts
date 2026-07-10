@@ -111,9 +111,16 @@ def _ensure_openai() -> str | None:
                 )
                 if r.returncode == 0:
                     break
-                last_err = (r.stderr or r.stdout or "").strip()[-400:]
+                err_txt = (r.stderr or r.stdout or "").strip()
+                # pip < 23.0 rejects --break-system-packages with a usage error;
+                # never let that overwrite the REAL failure (network/permissions)
+                # captured from an earlier variant.
+                _usage_noise = "no such option" in err_txt.lower()
+                if err_txt and (not _usage_noise or not last_err):
+                    last_err = err_txt[-400:]
             except Exception as e:
-                last_err = str(e)
+                if not last_err:
+                    last_err = str(e)
                 continue
         importlib.invalidate_caches()
         try:

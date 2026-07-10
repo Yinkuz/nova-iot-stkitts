@@ -3646,6 +3646,37 @@ async function launchApp() {
 // ── Bridge heartbeat + reconnect banner (#3) ──────────────────────────────────
 let _bridgeBanner = null;
 let _heartbeatTimer = null;
+let _expectedBridgeVer = '';   // handshake id from main process ('' until fetched)
+
+/**
+ * Stale-helper detection: the bridge outlives the app, so after an upgrade a
+ * reachable-but-old bridge can still hold the port. Never use it silently —
+ * warn the user how to clear it.
+ */
+function checkBridgeVersion(health) {
+  if (!_expectedBridgeVer || !health?.ok) return;
+  if (health.app_version === _expectedBridgeVer) { _hideStaleBanner(); return; }
+  _showStaleBanner(health.app_version || 'older version');
+}
+
+let _staleBanner = null;
+function _showStaleBanner(foundVer) {
+  if (_staleBanner) return;
+  _staleBanner = document.createElement('div');
+  _staleBanner.id = 'stale-bridge-banner';
+  _staleBanner.textContent =
+    `⚠ An old NOVA helper process (${foundVer}) is still running — features may misbehave. ` +
+    `Quit ALL NOVA windows (or reboot), then relaunch NOVA.`;
+  Object.assign(_staleBanner.style, {
+    position: 'fixed', top: '0', left: '0', right: '0', zIndex: '9998',
+    background: '#b45309', color: '#fff', textAlign: 'center',
+    padding: '6px 12px', fontSize: '13px',
+  });
+  document.body.prepend(_staleBanner);
+}
+function _hideStaleBanner() {
+  if (_staleBanner) { _staleBanner.remove(); _staleBanner = null; }
+}
 
 function startBridgeHeartbeat() {
   clearInterval(_heartbeatTimer);
@@ -3654,6 +3685,7 @@ function startBridgeHeartbeat() {
       const h = await api('/health');
       if (h?.ok) {
         _hideBridgeBanner();
+        checkBridgeVersion(h);
       } else {
         _showBridgeBanner();
       }
@@ -3744,6 +3776,11 @@ async function boot() {
     }
   } catch {}
 
+  // Handshake id for stale-bridge detection (missing API on old builds → skip)
+  try {
+    _expectedBridgeVer = (await window.electronAPI?.getExpectedBridgeVersion?.()) || '';
+  } catch {}
+
   // Brief wait for IPC to fire before we start polling
   await sleep(300);
 
@@ -3761,6 +3798,7 @@ async function boot() {
     } catch {}
     await sleep(300);
   }
+  if (health?.ok) checkBridgeVersion(health);   // warn if a stale helper answered
 
   el.loadingFill.style.width = '70%';
 

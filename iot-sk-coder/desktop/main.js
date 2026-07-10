@@ -56,6 +56,11 @@ function bridgeVersionMatches(health, appVersion) {
   return !!health && health.app_version === appVersion;
 }
 
+/** Handshake id this app expects from its bridge: version + install flavour. */
+function expectedBridgeVersion() {
+  return app.getVersion() + (app.isPackaged ? '' : '-dev');
+}
+
 /** Kill any process currently listening on the bridge port so a fresh spawn can bind. */
 function killStalePort(port) {
   return new Promise((resolve) => {
@@ -78,8 +83,11 @@ function killStalePort(port) {
         });
       });
     } else {
-      // macOS / Linux
-      exec(`lsof -ti tcp:${port}`, (err, stdout) => {
+      // macOS / Linux — LISTEN filter is critical: without it lsof also lists
+      // processes with client connections to the port (an old NOVA app mid-
+      // stream), and kill -9 would take down the running app, not just the
+      // stale bridge.
+      exec(`lsof -ti tcp:${port} -sTCP:LISTEN`, (err, stdout) => {
         const pids = (stdout || '').trim().split('\n').filter(Boolean);
         if (err || !pids.length) return resolve();
         exec(`kill -9 ${pids.join(' ')}`, () => setTimeout(resolve, 500));
@@ -103,15 +111,21 @@ function startBridge() {
       : ['python', 'py', 'python3'];
     let   tried      = 0;
 
+    let sawEarlyExit = false;   // a candidate started then exited (port conflict / stale bridge)
+
     function tryNext() {
       if (tried >= pythonCmds.length) {
-        reject(new Error('Python not found. Install Python 3.8+.'));
+        reject(new Error(sawEarlyExit
+          ? `Bridge exited on startup — port ${BRIDGE_PORT} may be held by a stale NOVA helper. Close all NOVA windows (or reboot) and relaunch.`
+          : 'Python not found. Install Python 3.8+.'));
         return;
       }
       const cmd  = pythonCmds[tried++];
       const env  = Object.assign({}, process.env, {
         ISTKC_TEAM_TOKEN:  process.env.ISTKC_TEAM_TOKEN || 'ISTKC-2025-ELCZ7OSB',
-        ISTKC_APP_VERSION: app.getVersion(),   // bridge reports this in /health for the upgrade handshake
+        // Upgrade handshake id: version + install flavour, so a dev checkout
+        // (npm start) and the installed app never adopt each other's bridges.
+        ISTKC_APP_VERSION: expectedBridgeVersion(),
         PYTHONIOENCODING:  'utf-8',
       });
       const proc = spawn(cmd, [serverScript, String(BRIDGE_PORT)], {
@@ -121,14 +135,19 @@ function startBridge() {
         env,
       });
 
+      let settled = false;   // BRIDGE_READY seen, or already moved to next candidate
+
       const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         proc.kill();
         tryNext();
       }, BRIDGE_TIMEOUT);
 
       proc.stdout.on('data', (data) => {
         const text = data.toString();
-        if (text.includes('BRIDGE_READY:')) {
+        if (text.includes('BRIDGE_READY:') && !settled) {
+          settled = true;
           clearTimeout(timer);
           bridge = proc;
           proc.unref();      // let Electron exit without waiting for the bridge
@@ -138,7 +157,20 @@ function startBridge() {
 
       proc.stderr.on('data', () => {});   // absorb stderr
 
+      // Bridge refused to start (e.g. exit(1) because a different-version
+      // bridge still holds the port) — fail over immediately instead of
+      // burning the full timeout per Python candidate.
+      proc.on('exit', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (code !== 0) sawEarlyExit = true;
+        tryNext();
+      });
+
       proc.on('error', () => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         tryNext();
       });
@@ -424,6 +456,8 @@ ipcMain.handle('send-cmd-input', (_e, { id, text }) => {
 
 // ── IPC — app version ────────────────────────────────────────────────────────
 ipcMain.handle('get-app-version', () => app.getVersion());
+// Handshake id the renderer should expect from /health (see expectedBridgeVersion)
+ipcMain.handle('get-expected-bridge-version', () => expectedBridgeVersion());
 
 // ── IPC — path utilities ──────────────────────────────────────────────────────
 ipcMain.handle('home-dir',     ()           => app.getPath('home'));
@@ -451,18 +485,25 @@ app.whenReady().then(async () => {
   // version. A bridge left over from a previous install must be replaced, or
   // the upgraded app keeps talking to old server code.
   const health = await checkExistingBridge(BRIDGE_PORT);
-  if (!bridgeVersionMatches(health, app.getVersion())) {
+  if (!bridgeVersionMatches(health, expectedBridgeVersion())) {
     if (health) {
-      console.log(`Stale bridge (v${health.app_version || 'pre-1.3.2'}) on port ${BRIDGE_PORT} — replacing with v${app.getVersion()}`);
+      console.log(`Stale bridge (${health.app_version || 'pre-1.3.2'}) on port ${BRIDGE_PORT} — replacing with ${expectedBridgeVersion()}`);
     }
-    // Clear any old/zombie process holding the port
-    await killStalePort(BRIDGE_PORT);
-    try {
-      port = await startBridge();
-    } catch (err) {
-      console.error('Bridge failed to start:', err.message);
-      // Continue anyway — renderer will show the reconnect banner
+    // Kill + respawn, with one full retry — the first kill can lose a race
+    // against a dying process still holding the socket.
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await killStalePort(BRIDGE_PORT);
+      try {
+        port = await startBridge();
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+      }
     }
+    if (lastErr) console.error('Bridge failed to start:', lastErr.message);
+    // On failure, continue anyway — the renderer shows its reconnect/stale banner
   }
 
   createWindow(port);

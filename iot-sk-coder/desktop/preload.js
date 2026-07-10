@@ -44,4 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // App version (reads from package.json via Electron)
   getVersion:    ()                => ipcRenderer.invoke('get-app-version'),
+
+  // Bridge handshake id this app expects (stale-bridge detection)
+  getExpectedBridgeVersion: ()     => ipcRenderer.invoke('get-expected-bridge-version'),
 });
