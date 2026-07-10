@@ -65,6 +65,52 @@ _tl    = threading.local()             # per-thread: sse_cb, model_cfg
 PORT = 7823
 
 
+# ── Core dependency bootstrap ─────────────────────────────────────────────────
+# Fresh machines (especially macOS) won't have the 'openai' package in the
+# system Python, and the packaged app can't ship it inside resources. Install
+# it on demand so first-run "No module named 'openai'" never reaches the user.
+_ensure_lock = threading.Lock()
+
+
+def _ensure_openai() -> str | None:
+    """Make sure 'openai' is importable, pip-installing it on first use.
+    Returns None on success, or an actionable error message."""
+    try:
+        import openai  # noqa: F401
+        return None
+    except ImportError:
+        pass
+    with _ensure_lock:                       # one install at a time
+        try:
+            import openai  # noqa: F401     # another thread may have finished it
+            return None
+        except ImportError:
+            pass
+        print("[bridge] 'openai' package missing — installing…", flush=True)
+        for extra in (["--user"], []):       # --user first; bare retry for venvs
+            try:
+                r = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "--quiet", *extra, "openai>=1.0"],
+                    capture_output=True, text=True, timeout=240,
+                )
+                if r.returncode == 0:
+                    break
+            except Exception:
+                continue
+        importlib.invalidate_caches()
+        try:
+            import openai  # noqa: F401
+            print("[bridge] 'openai' installed OK", flush=True)
+            return None
+        except ImportError:
+            return (
+                "The Python package 'openai' is not installed and automatic install "
+                f"failed (no internet or pip blocked?). Open a terminal and run:\n"
+                f"    {sys.executable} -m pip install openai\n"
+                "then try again."
+            )
+
+
 # ── CORS + JSON helpers ───────────────────────────────────────────────────────
 
 def _cors_headers(handler: BaseHTTPRequestHandler) -> None:
@@ -1967,6 +2013,10 @@ class Handler(BaseHTTPRequestHandler):
 
         elif self.path == "/model/validate":
             model_cfg = body
+            _dep_err = _ensure_openai()
+            if _dep_err:
+                _send_json(self, {"ok": False, "error": _dep_err})
+                return
             try:
                 from istkc.models import make_client
                 client = make_client(model_cfg)
@@ -2069,6 +2119,11 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
+            _dep_err = _ensure_openai()
+            if _dep_err:
+                sse({"error": _dep_err})
+                sse({"done": True})
+                return
             from istkc.models import make_client
             client = make_client(model_cfg)
 
@@ -2424,6 +2479,10 @@ class Handler(BaseHTTPRequestHandler):
 
 # Load any skills that exist on disk at startup
 _load_skills()
+
+# Warm the core dependency in the background so the first chat doesn't stall
+# on a pip install (macOS system Python ships without 'openai').
+threading.Thread(target=_ensure_openai, daemon=True).start()
 
 
 def run(port: int = PORT) -> None:

@@ -1041,6 +1041,18 @@ function initSetup() {
   bindProviderGrid(el.providerGrid, el.modelSelect, (p) => {
     setupProvider = p;
     updateKeyVisibility(p, 'key-group', 'key-input', 'key-btn');
+    // Switching provider repopulates the select — hide the custom-ID field
+    const ci = document.getElementById('setup-custom-id');
+    if (ci) { ci.style.display = 'none'; ci.value = ''; }
+  });
+
+  // Custom model → inline input (window.prompt() is unsupported in Electron
+  // and silently no-ops, which made the option look broken)
+  const customInput = document.getElementById('setup-custom-id');
+  el.modelSelect.addEventListener('change', () => {
+    const isCustom = el.modelSelect.value === '__custom__';
+    if (customInput) customInput.style.display = isCustom ? '' : 'none';
+    if (isCustom) customInput?.focus();
   });
 
   // Step 2: connect API key (or Ollama — no key needed)
@@ -1048,8 +1060,12 @@ function initSetup() {
     const selected = el.modelSelect.value;
     let modelMeta, apiId;
     if (selected === '__custom__') {
-      apiId     = prompt('Enter model ID (e.g. anthropic/claude-sonnet-4-5):');
-      if (!apiId) return;
+      apiId = customInput?.value.trim();
+      if (!apiId) {
+        el.keyError.textContent = 'Enter a model ID (e.g. anthropic/claude-opus-4-5).';
+        customInput?.focus();
+        return;
+      }
       modelMeta = { id: apiId, name: apiId, api_id: apiId };
     } else {
       modelMeta = JSON.parse(selected);
