@@ -2113,3 +2113,9 @@ body {
 .brain-act-btn:hover          { background: var(--nova, #ff3b5c); color: #fff; border-color: var(--nova, #ff3b5c); }
 .brain-act-btn.danger:hover   { background: #ef4444; border-color: #ef4444; }
 .brain-act-btn:disabled       { opacity: .5; cursor: default; }
+
+/* ── macOS window controls ────────────────────────────────────────────────── */
+/* Native traffic lights (top-left) handle min/max/close on macOS — hide the
+   custom Windows-style buttons and clear space for the lights. */
+.platform-darwin #titlebar-controls { display: none; }
+.platform-darwin #titlebar-drag     { padding-left: 72px; }

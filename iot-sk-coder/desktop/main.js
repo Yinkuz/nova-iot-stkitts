@@ -182,13 +182,18 @@ function startBridge() {
 
 // ── Window ────────────────────────────────────────────────────────────────────
 function createWindow(bridgePort) {
+  const isMac = process.platform === 'darwin';
   mainWindow = new BrowserWindow({
     width:           1280,
     height:          820,
     minWidth:        900,
     minHeight:       600,
-    frame:           false,          // custom titlebar
-    titleBarStyle:   'hidden',
+    frame:           false,          // custom titlebar (Windows/Linux)
+    // macOS: keep the native traffic lights (top-LEFT, as users expect) and
+    // hide the custom right-side controls in CSS. hiddenInset vertically
+    // centres the lights within the custom titlebar strip.
+    titleBarStyle:   isMac ? 'hiddenInset' : 'hidden',
+    ...(isMac ? { trafficLightPosition: { x: 12, y: 12 } } : {}),
     backgroundColor: '#080c14',
     icon:            path.join(__dirname, 'src', 'assets', 'icon.png'),
     webPreferences: {

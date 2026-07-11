@@ -5,6 +5,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // OS platform ('darwin' | 'win32' | 'linux') — lets CSS adapt window controls
+  platform: process.platform,
+
   // Receive the bridge port once Python server is ready
   onBridgePort: (cb) => ipcRenderer.on('bridge-port', (_e, port) => cb(port)),
 
