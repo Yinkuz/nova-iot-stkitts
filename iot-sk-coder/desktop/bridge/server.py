@@ -111,9 +111,16 @@ def _ensure_openai() -> str | None:
                 )
                 if r.returncode == 0:
                     break
-                last_err = (r.stderr or r.stdout or "").strip()[-400:]
+                err_txt = (r.stderr or r.stdout or "").strip()
+                # pip < 23.0 rejects --break-system-packages with a usage error;
+                # never let that overwrite the REAL failure (network/permissions)
+                # captured from an earlier variant.
+                _usage_noise = "no such option" in err_txt.lower()
+                if err_txt and (not _usage_noise or not last_err):
+                    last_err = err_txt[-400:]
             except Exception as e:
-                last_err = str(e)
+                if not last_err:
+                    last_err = str(e)
                 continue
         importlib.invalidate_caches()
         try:
@@ -938,6 +945,20 @@ def _py_search(pattern: str, file_pattern: str, workspace: str) -> str:
     out = "\n".join(matches)
     if total > 8_000:
         out += "\n[...results truncated]"
+    return out
+
+
+def _strip_image_parts(messages: list) -> list:
+    """Collapse multimodal image parts to text — for endpoints without vision."""
+    out = []
+    for m in messages:
+        c = m.get("content") if isinstance(m, dict) else None
+        if isinstance(c, list):
+            texts = [p.get("text", "") for p in c
+                     if isinstance(p, dict) and p.get("type") == "text"]
+            joined = "\n".join(t for t in texts if t)
+            m = {**m, "content": joined or "[image omitted — model has no vision support]"}
+        out.append(m)
     return out
 
 
@@ -2196,6 +2217,22 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     except Exception as _e:
                         _last_exc = _e
+                        _msg = str(_e).lower()
+                        # Capability degradation — the endpoint can't do tools
+                        # or images (common on :free OpenRouter endpoints).
+                        # Strip the unsupported part and retry instead of
+                        # failing the whole turn.
+                        if "tools" in kwargs and "tool" in _msg and ("support" in _msg or "404" in _msg):
+                            kwargs.pop("tools", None)
+                            kwargs.pop("tool_choice", None)
+                            supports_tools = False
+                            sse({"text": "\n⚠️ This model's endpoint doesn't support tools — continuing without them.\n"})
+                            continue
+                        if "image input" in _msg or ("image" in _msg and "support" in _msg):
+                            current_messages = _strip_image_parts(current_messages)
+                            kwargs["messages"] = current_messages
+                            sse({"text": "\n⚠️ This model can't see images — continuing with text only.\n"})
+                            continue
                         _status = getattr(getattr(_e, "response", None), "status_code", None)
                         _transient = _status in (429, 500, 503) or "timeout" in str(_e).lower()
                         if not _transient:
