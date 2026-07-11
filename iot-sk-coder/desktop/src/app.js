@@ -830,6 +830,24 @@ function buildMultimodalContent(text, attachments, modelApiId = null) {
   return parts;  // array content = vision message
 }
 
+// ── History sanitiser ─────────────────────────────────────────────────────────
+// Conversation history keeps multimodal content (base64 image parts) from
+// earlier turns. Re-sending those to a text-only model makes OpenRouter fail
+// the WHOLE request with "404 — no endpoints that support image input".
+// For non-vision models, collapse image parts to their text; the attachment
+// metadata (path, dimensions) already in the text keeps the context useful.
+function sanitizeMessagesForModel(messages, apiId) {
+  if (capsFor(apiId).vision) return messages;
+  return messages.map(m => {
+    if (!Array.isArray(m.content)) return m;
+    const text = m.content
+      .filter(p => p && p.type === 'text')
+      .map(p => p.text || '')
+      .join('\n');
+    return { ...m, content: text || '[image attachment omitted — this model cannot see images]' };
+  });
+}
+
 // ── Drag-and-drop events ──────────────────────────────────────────────────────
 function initDragDrop() {
   const wrap = document.getElementById('messages-wrap');
@@ -2000,7 +2018,7 @@ async function sendMessage(text) {
 
     const apiMessages = [
       { role: 'system', content: fullSys },
-      ...state.messages,
+      ...sanitizeMessagesForModel(state.messages, chosenModel.api_id),
     ];
 
     showRoutedBadge(chosenModel);
@@ -2500,7 +2518,7 @@ async function regenerateResponse(card) {
 
   const apiMessages = [
     { role: 'system', content: buildSystemPrompt() },
-    ...state.messages,
+    ...sanitizeMessagesForModel(state.messages, state.modelCfg?.api_id),
   ];
 
   await streamChat(
@@ -3033,7 +3051,7 @@ async function runAgentTask() {
   el.sendBtn.disabled = true;
 
   const res = await api('/run-brief', {
-    messages:  state.messages,
+    messages:  sanitizeMessagesForModel(state.messages, state.modelCfg?.api_id),
     model_cfg: state.modelCfg,
   }).catch(() => ({ ok: false, error: 'Bridge unreachable.' }));
 

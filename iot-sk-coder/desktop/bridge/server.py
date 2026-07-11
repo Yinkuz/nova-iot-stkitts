@@ -948,6 +948,20 @@ def _py_search(pattern: str, file_pattern: str, workspace: str) -> str:
     return out
 
 
+def _strip_image_parts(messages: list) -> list:
+    """Collapse multimodal image parts to text — for endpoints without vision."""
+    out = []
+    for m in messages:
+        c = m.get("content") if isinstance(m, dict) else None
+        if isinstance(c, list):
+            texts = [p.get("text", "") for p in c
+                     if isinstance(p, dict) and p.get("type") == "text"]
+            joined = "\n".join(t for t in texts if t)
+            m = {**m, "content": joined or "[image omitted — model has no vision support]"}
+        out.append(m)
+    return out
+
+
 def _strip_md_fences(text: str) -> str:
     """Remove a wrapping markdown code fence from output meant to be raw file content."""
     t = text.strip()
@@ -2203,6 +2217,22 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     except Exception as _e:
                         _last_exc = _e
+                        _msg = str(_e).lower()
+                        # Capability degradation — the endpoint can't do tools
+                        # or images (common on :free OpenRouter endpoints).
+                        # Strip the unsupported part and retry instead of
+                        # failing the whole turn.
+                        if "tools" in kwargs and "tool" in _msg and ("support" in _msg or "404" in _msg):
+                            kwargs.pop("tools", None)
+                            kwargs.pop("tool_choice", None)
+                            supports_tools = False
+                            sse({"text": "\n⚠️ This model's endpoint doesn't support tools — continuing without them.\n"})
+                            continue
+                        if "image input" in _msg or ("image" in _msg and "support" in _msg):
+                            current_messages = _strip_image_parts(current_messages)
+                            kwargs["messages"] = current_messages
+                            sse({"text": "\n⚠️ This model can't see images — continuing with text only.\n"})
+                            continue
                         _status = getattr(getattr(_e, "response", None), "status_code", None)
                         _transient = _status in (429, 500, 503) or "timeout" in str(_e).lower()
                         if not _transient:
