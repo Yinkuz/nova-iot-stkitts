@@ -3774,6 +3774,10 @@ function initImagePaste() {
 }
 
 async function boot() {
+  // Platform class — CSS hides the custom window buttons on macOS (native
+  // traffic lights live top-left there) and pads the titlebar to clear them.
+  document.body.classList.add(`platform-${window.electronAPI?.platform || 'win32'}`);
+
   // Wait for the bridge port from Electron main
   window.electronAPI?.onBridgePort((port) => {
     BRIDGE = `http://127.0.0.1:${port}`;
