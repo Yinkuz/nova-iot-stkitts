@@ -74,9 +74,24 @@ jobs:
 
       - name: Build macOS DMG (Intel + Apple Silicon)
         working-directory: iot-sk-coder/desktop
-        run: npx electron-builder --mac --x64 --arm64
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+        # GitHub's macOS runners intermittently fail DMG creation with
+        # "hdiutil: detach failed - No such file or directory" (stale
+        # diskimages-helper). Retry up to 3x, detaching any leftover
+        # disk-image mounts between attempts.
+        run: |
+          for attempt in 1 2 3; do
+            if npx electron-builder --mac --x64 --arm64; then
+              exit 0
+            fi
+            echo "::warning::electron-builder failed (attempt $attempt) — cleaning stale DMG mounts and retrying"
+            hdiutil info | grep -oE '/dev/disk[0-9]+' | sort -u \
+              | xargs -I{} hdiutil detach -force {} 2>/dev/null || true
+            sleep 15
+          done
+          echo "::error::macOS build failed after 3 attempts"
+          exit 1
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
