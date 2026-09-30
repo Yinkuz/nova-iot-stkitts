@@ -74,7 +74,13 @@ jobs:
 
       - name: Build macOS DMG (Intel + Apple Silicon)
         working-directory: iot-sk-coder/desktop
-        run: npx electron-builder --mac --x64 --arm64
+        # electron-builder exits 1 when hdiutil detach races on cleanup, even
+        # after all DMG artifacts are written.  Tolerate that specific failure:
+        # check the DMGs exist; if they don't, propagate the real error.
+        run: |
+          npx electron-builder --mac --x64 --arm64 || {
+            ls dist/NOVA*.dmg 2>/dev/null || exit 1
+          }
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
