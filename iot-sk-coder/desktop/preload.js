@@ -50,4 +50,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Bridge handshake id this app expects (stale-bridge detection)
   getExpectedBridgeVersion: ()     => ipcRenderer.invoke('get-expected-bridge-version'),
+
+  // Bridge control — renderer can request a hard restart (e.g. reconnect button)
+  restartBridge: ()                => ipcRenderer.invoke('restart-bridge'),
 });

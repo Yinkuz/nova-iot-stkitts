@@ -17,7 +17,7 @@ const { spawn } = require('child_process');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const BRIDGE_PORT    = 7823;
-const BRIDGE_TIMEOUT = 15_000;          // ms to wait for Python server
+const BRIDGE_TIMEOUT = 30_000;          // ms to wait for Python server (30 s for slow first-start)
 
 let mainWindow = null;
 let bridge     = null;
@@ -105,10 +105,19 @@ function startBridge() {
       : path.join(__dirname, 'bridge');
     const serverScript = path.join(bridgeDir, 'server.py');
 
-    // macOS: python3 is default; Windows: python or py; Linux: python3
+    // Probe order: try the PATH-resolved name first, then absolute fallbacks
+    // so we work after macOS updates that move Homebrew Python or strip /usr/bin/python3.
     const pythonCmds = process.platform === 'darwin'
-      ? ['python3', 'python']
-      : ['python', 'py', 'python3'];
+      ? [
+          'python3',                       // PATH (works if Xcode CLT / pyenv / conda active)
+          '/opt/homebrew/bin/python3',     // Homebrew — Apple Silicon (M1/M2/M3/M4)
+          '/usr/local/bin/python3',        // Homebrew — Intel Mac
+          '/usr/bin/python3',              // Apple Xcode CLT stub (may launch installer)
+          'python',                        // legacy alias
+        ]
+      : process.platform === 'linux'
+        ? ['python3', 'python']
+        : ['python', 'py', 'python3'];    // Windows
     let   tried      = 0;
 
     let sawEarlyExit = false;   // a candidate started then exited (port conflict / stale bridge)
@@ -155,7 +164,8 @@ function startBridge() {
         }
       });
 
-      proc.stderr.on('data', () => {});   // absorb stderr
+      // Log stderr — critical for diagnosing Python startup failures after OS updates
+      proc.stderr.on('data', (d) => { console.error('[bridge stderr]', d.toString().trim()); });
 
       // Bridge refused to start (e.g. exit(1) because a different-version
       // bridge still holds the port) — fail over immediately instead of
@@ -459,6 +469,20 @@ ipcMain.handle('send-cmd-input', (_e, { id, text }) => {
   return { ok: false };
 });
 
+// ── IPC — bridge restart (renderer reconnect button) ─────────────────────────
+ipcMain.handle('restart-bridge', async () => {
+  const up = await checkExistingBridge(BRIDGE_PORT);
+  if (up) return { ok: true, port: BRIDGE_PORT, reused: true };
+  await killStalePort(BRIDGE_PORT);
+  try {
+    const port = await startBridge();
+    mainWindow?.webContents.send('bridge-port', port);
+    return { ok: true, port };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // ── IPC — app version ────────────────────────────────────────────────────────
 ipcMain.handle('get-app-version', () => app.getVersion());
 // Handshake id the renderer should expect from /health (see expectedBridgeVersion)
@@ -521,6 +545,16 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow(BRIDGE_PORT);
+app.on('activate', async () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    // On macOS, re-activation may happen after a long sleep/update — re-check bridge health
+    const stillUp = await checkExistingBridge(BRIDGE_PORT);
+    if (!stillUp) {
+      await killStalePort(BRIDGE_PORT);
+      try { await startBridge(); } catch (e) {
+        console.error('Bridge restart on activate failed:', e.message);
+      }
+    }
+    createWindow(BRIDGE_PORT);
+  }
 });
