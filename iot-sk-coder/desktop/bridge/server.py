@@ -128,13 +128,52 @@ def _ensure_openai() -> str | None:
             print("[bridge] 'openai' installed OK", flush=True)
             return None
         except ImportError:
-            detail = f"\n\npip said:\n{last_err}" if last_err else ""
-            return (
-                "The Python package 'openai' is not installed and automatic install "
-                "failed (no internet, or pip blocked?). Open a terminal and run:\n"
-                f"    {sys.executable} -m pip install openai\n"
-                "then try again." + detail
-            )
+            pass
+
+        # macOS fallback: if this Python is the Xcode CLT (externally-managed),
+        # check whether a Homebrew Python has openai installed and borrow its
+        # site-packages directory rather than requiring a pip install.
+        if sys.platform == "darwin":
+            for hb in ("/opt/homebrew/bin/python3", "/usr/local/bin/python3"):
+                if not os.path.exists(hb) or hb == sys.executable:
+                    continue
+                try:
+                    r = subprocess.run(
+                        [hb, "-c",
+                         "import importlib.util; "
+                         "spec = importlib.util.find_spec('openai'); "
+                         "print(spec.submodule_search_locations[0] if spec else '')"],
+                        capture_output=True, text=True, timeout=8,
+                    )
+                    pkg_dir = r.stdout.strip()  # e.g. /opt/homebrew/lib/python3.x/site-packages/openai
+                    if not pkg_dir:
+                        continue
+                    site_pkgs = str(Path(pkg_dir).parent)
+                    if site_pkgs not in sys.path:
+                        sys.path.insert(0, site_pkgs)
+                    importlib.invalidate_caches()
+                    try:
+                        import openai  # noqa: F401
+                        print(f"[bridge] Using 'openai' from Homebrew at {site_pkgs}", flush=True)
+                        return None
+                    except ImportError:
+                        sys.path.remove(site_pkgs)
+                except Exception:
+                    continue
+
+        detail = f"\n\npip said:\n{last_err}" if last_err else ""
+        hb_hint = (
+            "\n\nAlternatively, install via Homebrew Python:\n"
+            "    /opt/homebrew/bin/python3 -m pip install openai\n"
+            "then relaunch NOVA."
+            if sys.platform == "darwin" else ""
+        )
+        return (
+            "The Python package 'openai' is not installed and automatic install "
+            "failed (no internet, or pip blocked?). Open a terminal and run:\n"
+            f"    {sys.executable} -m pip install openai\n"
+            "then try again." + hb_hint + detail
+        )
 
 
 # ── CORS + JSON helpers ───────────────────────────────────────────────────────

@@ -105,14 +105,17 @@ function startBridge() {
       : path.join(__dirname, 'bridge');
     const serverScript = path.join(bridgeDir, 'server.py');
 
-    // Probe order: try the PATH-resolved name first, then absolute fallbacks
-    // so we work after macOS updates that move Homebrew Python or strip /usr/bin/python3.
+    // Probe absolute Homebrew paths first on macOS: Electron GUI apps don't
+    // inherit the shell PATH, so bare 'python3' resolves to the Xcode CLT Python
+    // (/Library/Developer/CommandLineTools/…) which is an externally-managed
+    // environment where pip cannot install packages.  Homebrew Python always
+    // has pip and writable site-packages, so try those before falling back to PATH.
     const pythonCmds = process.platform === 'darwin'
       ? [
-          'python3',                       // PATH (works if Xcode CLT / pyenv / conda active)
           '/opt/homebrew/bin/python3',     // Homebrew — Apple Silicon (M1/M2/M3/M4)
           '/usr/local/bin/python3',        // Homebrew — Intel Mac
-          '/usr/bin/python3',              // Apple Xcode CLT stub (may launch installer)
+          'python3',                       // PATH fallback (pyenv / conda / etc.)
+          '/usr/bin/python3',              // Apple stub (launches downloader dialog)
           'python',                        // legacy alias
         ]
       : process.platform === 'linux'
