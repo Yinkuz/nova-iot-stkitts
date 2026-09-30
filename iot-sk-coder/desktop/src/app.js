@@ -1040,10 +1040,27 @@ el.tokenBtn.addEventListener('click', async () => {
     el.stepToken.classList.add('hidden');
     el.stepModel.classList.remove('hidden');
     if (el.novaArtSetup) setFace('idle', el.novaArtSetup);
+  } else if (res.error === 'Bridge not ready.') {
+    // Bridge not running — try to restart it automatically before telling the user
+    el.tokenError.textContent = '⟳  Starting server…';
+    el.tokenBtn.disabled = true;
+    try {
+      const restart = await window.electronAPI?.restartBridge?.();
+      if (restart?.ok) {
+        // Bridge came up — re-attempt verify automatically
+        el.tokenBtn.disabled = false;
+        el.tokenBtn.click();
+        return;
+      }
+    } catch { /* fall through */ }
+    el.tokenBtn.disabled = false;
+    el.tokenError.textContent = '✕  Could not reach server. Is NOVA starting?';
+    if (el.novaArtSetup) {
+      el.novaArtSetup.textContent = NOVA_FACES.blink;
+      setTimeout(() => setFace('idle', el.novaArtSetup), 800);
+    }
   } else {
-    el.tokenError.textContent = res.error === 'Bridge not ready.'
-      ? '✕  Could not reach server. Is NOVA starting?'
-      : '✕  Invalid token. Ask your IT admin.';
+    el.tokenError.textContent = '✕  Invalid token. Ask your IT admin.';
     if (el.novaArtSetup) {
       el.novaArtSetup.textContent = NOVA_FACES.blink;
       setTimeout(() => setFace('idle', el.novaArtSetup), 800);
@@ -3729,11 +3746,24 @@ function _showBridgeBanner() {
   });
   document.body.prepend(_bridgeBanner);
   document.getElementById('bridge-reconnect-btn').addEventListener('click', async () => {
-    _bridgeBanner.querySelector('span').textContent = '⟳ Reconnecting…';
+    const span = _bridgeBanner.querySelector('span');
+    const btn  = document.getElementById('bridge-reconnect-btn');
+    btn.disabled = true;
+    span.textContent = '⟳ Restarting server…';
     try {
+      // Ask main process to spawn a fresh Python bridge, then poll health
+      if (window.electronAPI?.restartBridge) {
+        const res = await window.electronAPI.restartBridge();
+        if (res?.ok) { _hideBridgeBanner(); return; }
+      }
+      // Fallback: just probe health (useful in dev without restartBridge wired)
       const h = await api('/health');
       if (h?.ok) _hideBridgeBanner();
-    } catch { /* still down */ }
+      else { span.textContent = '⚠ Bridge disconnected'; btn.disabled = false; }
+    } catch {
+      span.textContent = '⚠ Bridge disconnected';
+      btn.disabled = false;
+    }
   });
 }
 
